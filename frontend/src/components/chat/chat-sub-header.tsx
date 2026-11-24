@@ -104,16 +104,16 @@ export function ChatSubHeader({
   activeChatId,
 }: ChatSubHeaderProps) {
   // Safe aggregation: fallback gracefully to tokensUsed if usageSummary is absent
-  const effectiveSummary: ChatUsageSummary | null =
-    usageSummary ||
-    (tokensUsed && tokensUsed.total > 0
-      ? {
-          input_tokens: tokensUsed.input || 0,
-          output_tokens: tokensUsed.output || 0,
-          total_tokens: tokensUsed.total || 0,
-          total_cost_usd: totalCostUsd ?? 0,
-        }
-      : null);
+  // Note: `usageSummary` is forwarded directly to `UsageBadgeGroup`
+  // (see render below). We intentionally do NOT synthesize a fallback
+  // summary from `tokensUsed` because:
+  //   1. `ChatUsageSummary.total_cost_usd` is strictly typed as
+  //      `number`, so a `null` fallback would break the type.
+  //   2. A synthesized summary would carry `0` for the cost, and
+  //      `UsageBadgeGroup` would render a misleading "$0.00" when
+  //      the real cost is simply unknown.
+  // When `usageSummary` is absent, the badge group falls back to the
+  // `tokensUsed` / `costUsd` props we pass alongside it.
 
   return (
     <div className="h-12 flex items-center justify-between px-5 bg-transparent backdrop-blur-sm shrink-0 font-sans">
@@ -160,16 +160,27 @@ export function ChatSubHeader({
 
         {/* Token & Telemetry Badges Cluster */}
         {/* Single Unified Header Badge */}
-                {tokensUsed && tokensUsed.total > 0 && (
-                  <UsageBadgeGroup
-                    tokensUsed={tokensUsed}
-                    costUsd={totalCostUsd ?? 0}
-                    provider={activeProvider}
-                    model={activeModel}
-                    variant="compact"
-                    showBreakdown={true}
-                  />
-                )}
+        {/* Passes the raw sources so `UsageBadgeGroup` can resolve
+            each field independently:
+              - `summary` carries `cached_input_tokens` and
+                `reasoning_output_tokens` when the backend provides
+                a full session aggregate.
+              - `tokensUsed` is the flat aggregate fallback.
+              - `costUsd` is passed as-is (may be null) so the
+                CostBadge hides itself instead of rendering a fake
+                "$0.00".
+            `UsageBadgeGroup` internally returns `null` when none of
+            tokens / cost / latency are present, so no additional
+            guard is needed here. */}
+        <UsageBadgeGroup
+          tokensUsed={tokensUsed}
+          summary={usageSummary}
+          costUsd={totalCostUsd}
+          provider={activeProvider}
+          model={activeModel}
+          variant="compact"
+          showBreakdown={true}
+        />
 
 
         {/* STEP COUNTER: Strict Isolation - Visible ONLY when execMode === 'agent' */}

@@ -215,6 +215,12 @@ export function HistoricalTurn({
             showReasoning ? turn.chatReasoningText : undefined
           }
           timestamp={turn.timestamp}
+          // Pass the full TurnUsage snapshot so the expanded
+          // usage panel can display prompt-cache hits and
+          // reasoning-token breakdowns for historical turns.
+          turn={turn.usage}
+          // Retain flat aggregates for backward compatibility
+          // with turns persisted before TurnUsage was captured.
           tokensUsed={turn.tokensUsed}
           costUsd={turn.usage?.cost_usd}
           latencyMs={turn.usage?.latency_ms}

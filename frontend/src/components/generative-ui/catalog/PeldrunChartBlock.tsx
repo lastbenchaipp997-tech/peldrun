@@ -919,7 +919,7 @@ export function PeldrunChartBlock({
         </div>
       )}
 
-      <div className="p-4 bg-background/20">
+      <div className="p-4 bg-card">
         {showSource ? (
           <pre className="max-h-[280px] overflow-auto p-3 rounded-lg bg-background/80 border border-border/60 text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
             {source}

@@ -11,6 +11,7 @@ import { resolveFileCategory } from "./chat-thread/utils";
 import { ChatReasoningPanel } from "./chat-thread/ChatReasoningPanel";
 import { UsageBadgeGroup } from "@/components/chat/UsageBadges";
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
+import type { TokenUsageInfo, TurnUsage } from "@/lib/types";
 
 interface ChatDeliverableProps {
   finalResult: string;
@@ -51,10 +52,45 @@ interface ChatDeliverableProps {
    */
   providerName?: string;
   timestamp?: string;
+  /**
+   * Full per-turn usage snapshot.
+   *
+   * The preferred way to feed this component with the complete
+   * accounting matrix (tokens + cache hits + reasoning tokens +
+   * cost + latency + throughput + provider). Callers that hold a
+   * `TurnUsage` object should pass it here rather than re-packing
+   * its individual fields — `UsageBadgeGroup` resolves every
+   * sub-field internally.
+   *
+   * HistoricalTurn passes `turn={turn.usage}` (the ChatTurn's
+   * TurnUsage snapshot); the live turn in ChatThread uses the flat
+   * `tokensUsed` / `costUsd` / `latencyMs` fallbacks because it
+   * does not yet have a fully-populated TurnUsage object.
+   */
+  turn?: Partial<TurnUsage> | null;
+  /**
+   * Inner TokenUsageInfo, when the caller only has the raw token
+   * matrix (no cost/latency/provenance wrapper).
+   *
+   * Mutually exclusive with `turn` in practice; both are forwarded
+   * to `UsageBadgeGroup` and its resolution chain prefers whichever
+   * source supplies each field first. Kept for callers that
+   * cannot build a full TurnUsage object.
+   */
+  usage?: TokenUsageInfo | null;
   tokensUsed?: { input?: number; output?: number; total?: number };
   costUsd?: number | null;
   latencyMs?: number | null;
   tokensPerSecond?: number | null;
+  /**
+   * Connection base URL that produced this turn.
+   *
+   * Used only by the `checkIsLocalProvider` heuristic so local
+   * runtimes (LM Studio, Ollama, llama.cpp) render as
+   * "Free (Local)" instead of "$0.00". Optional; when omitted,
+   * detection falls back to the provider name alone.
+   */
+  baseUrl?: string | null;
   onRegenerate?: (turnIndex?: number) => void;
   hideHeader?: boolean;
   /**
@@ -92,10 +128,13 @@ export function ChatDeliverable({
   modelName = "Assistant",
   providerName,
   timestamp,
+  turn,
+  usage,
   tokensUsed,
   costUsd,
   latencyMs,
   tokensPerSecond,
+  baseUrl,
   onRegenerate,
   hideHeader = false,
   reasoningContent,
@@ -151,7 +190,39 @@ export function ChatDeliverable({
     }
   }
 
-  const hasUsage = Boolean(tokensUsed && tokensUsed.total && tokensUsed.total > 0);
+  // Telemetry presence check.
+  //
+  // A turn may carry usage without a `tokensUsed` aggregate — for
+  // example a provider that returns only cache-hit counters, a
+  // local runtime that reports latency without token counts, or a
+  // proxied endpoint that emits `costUsd` alone. Gating on
+  // `tokensUsed.total` alone would silently drop all of those.
+  //
+  // The union check below mirrors the empty-state guard inside
+  // `UsageBadgeGroup` (which returns null only when tokens, cost,
+  // and latency are ALL empty), so the trigger button appears
+  // exactly when the expanded panel would have something to show.
+  const hasUsage = Boolean(
+    (tokensUsed && tokensUsed.total && tokensUsed.total > 0) ||
+      (usage &&
+        ((usage.input_tokens ?? 0) > 0 ||
+          (usage.output_tokens ?? 0) > 0 ||
+          (usage.total_tokens ?? 0) > 0 ||
+          (usage.cached_input_tokens ?? 0) > 0 ||
+          (usage.reasoning_output_tokens ?? 0) > 0)) ||
+      (turn &&
+        ((turn.usage?.input_tokens ?? 0) > 0 ||
+          (turn.usage?.output_tokens ?? 0) > 0 ||
+          (turn.usage?.total_tokens ?? 0) > 0 ||
+          (turn.usage?.cached_input_tokens ?? 0) > 0 ||
+          (turn.usage?.reasoning_output_tokens ?? 0) > 0 ||
+          (turn.cost_usd !== null && turn.cost_usd !== undefined) ||
+          (turn.latency_ms !== null &&
+            turn.latency_ms !== undefined &&
+            turn.latency_ms > 0))) ||
+      (costUsd !== null && costUsd !== undefined) ||
+      (latencyMs !== null && latencyMs !== undefined && latencyMs > 0)
+  );
 
   return (
     <div className="space-y-3 font-sans group/msg">
@@ -384,10 +455,30 @@ export function ChatDeliverable({
         <div className="flex items-center">
           {hasUsage && (
             <UsageBadgeGroup
+              // Full per-turn snapshot (preferred). Carries the token
+              // matrix, prompt-cache hits, reasoning tokens, cost,
+              // latency, throughput, and provider snapshot in a
+              // single object — the resolution chain in
+              // UsageBadgeGroup picks whichever fields are present.
+              turn={turn}
+              // Raw token matrix fallback for callers without a
+              // TurnUsage wrapper.
+              usage={usage}
+              // Flat props from ChatThread's live turn — the source
+              // that feeds the current in-progress response.
               tokensUsed={tokensUsed}
-              costUsd={costUsd ?? 0}
+              // Pass `costUsd` as-is (may be null). CostBadge treats
+              // null as "unknown" and hides the badge; a `?? 0`
+              // coercion here would render unknown as "$0.00" which
+              // is actively misleading.
+              costUsd={costUsd}
               latencyMs={latencyMs}
               tokensPerSecond={tokensPerSecond}
+              // Feed the resolved provider name + base URL so the
+              // `checkIsLocalProvider` heuristic can classify local
+              // runtimes correctly ("Free (Local)" vs "$0.00").
+              provider={resolvedProviderName}
+              baseUrl={baseUrl}
               model={modelName}
               variant="card"
             />

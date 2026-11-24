@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Coins,
   Clock,
@@ -12,6 +13,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { TokenUsageInfo, TurnUsage, ChatUsageSummary } from "@/lib/types";
+
+// Safe useLayoutEffect alias to prevent SSR warnings in Next.js.
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 // =========================================================================
 // Pure Formatting Helpers (Reusable across UI & exports)
@@ -247,7 +252,7 @@ export interface UsageBadgeGroupProps {
   tokensUsed?: { input?: number; output?: number; total?: number } | null;
   usage?: TokenUsageInfo | null;
   summary?: ChatUsageSummary | null;
-  turn?: TurnUsage | null;
+    turn?: Partial<TurnUsage> | null;
 
   costUsd?: number | null;
   latencyMs?: number | null;
@@ -280,6 +285,85 @@ export function UsageBadgeGroup({
   className = "",
 }: UsageBadgeGroupProps) {
   const [expanded, setExpanded] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Click-outside handler to close the popup.
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        triggerRef.current &&
+        !triggerRef.current.contains(e.target as Node) &&
+        popupRef.current &&
+        !popupRef.current.contains(e.target as Node)
+      ) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [expanded]);
+
+  // Viewport-aware positioning: flip vertically and horizontally
+  // when the popup would overflow the viewport.
+  useIsomorphicLayoutEffect(() => {
+    if (!expanded || !triggerRef.current || !popupRef.current) return;
+
+    const updatePosition = () => {
+      const triggerRect = triggerRef.current!.getBoundingClientRect();
+      const popupRect = popupRef.current!.getBoundingClientRect();
+
+      const padding = 8;
+      const spaceBottom = window.innerHeight - triggerRect.bottom - padding;
+      const spaceTop = triggerRect.top - padding;
+      const spaceRight = window.innerWidth - triggerRect.left - padding;
+      const spaceLeft = triggerRect.right - padding;
+
+      let top = triggerRect.bottom + 4;
+      let left = triggerRect.left;
+
+      // Flip vertically if there is not enough space below but enough above.
+      if (spaceBottom < popupRect.height && spaceTop > spaceBottom) {
+        top = triggerRect.top - popupRect.height - 4;
+      }
+
+      // Flip horizontally if there is not enough space to the right
+      // but enough to the left.
+      if (spaceRight < popupRect.width && spaceLeft > spaceRight) {
+        left = triggerRect.right - popupRect.width;
+      }
+
+      // Clamp to viewport bounds to prevent off-screen rendering.
+      left = Math.max(
+        padding,
+        Math.min(left, window.innerWidth - popupRect.width - padding)
+      );
+      top = Math.max(
+        padding,
+        Math.min(top, window.innerHeight - popupRect.height - padding)
+      );
+
+      setCoords({ top, left });
+    };
+
+    updatePosition();
+
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [expanded]);
 
   // 1. Resolve Token Metrics
   const resolvedTokens =
@@ -356,6 +440,7 @@ export function UsageBadgeGroup({
     <div className={`relative inline-flex select-none ${className}`}>
       {/* Collapsed trigger: token icon only */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setExpanded((current) => !current)}
         className={`inline-flex items-center justify-center text-black/50 transition-colors hover:text-foreground cursor-pointer ${
@@ -372,9 +457,15 @@ export function UsageBadgeGroup({
         <Coins size={iconSize} className="shrink-0 opacity-80" />
       </button>
 
-      {/* Expanded dropdown: badges + full accounting matrix */}
-      {expanded && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[280px] max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-card p-2 shadow-lg animate-in fade-in-50 duration-150">
+      {/* Expanded dropdown: badges + full accounting matrix.
+          Rendered in a portal to escape any parent overflow/transform
+          clipping and positioned dynamically based on viewport space. */}
+      {expanded && mounted && createPortal(
+        <div
+          ref={popupRef}
+          style={{ top: coords.top, left: coords.left }}
+          className="fixed z-[100] w-max min-w-[280px] max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-card p-2 shadow-lg animate-in fade-in-50 duration-150"
+        >
           <div className="flex flex-wrap items-center gap-1.5">
             <TokenBadge
               tokens={resolvedTokens}
@@ -468,7 +559,8 @@ export function UsageBadgeGroup({
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

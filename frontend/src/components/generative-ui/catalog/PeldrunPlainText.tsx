@@ -455,7 +455,7 @@ export function PeldrunPlainText({
     .join(" ");
 
   const bodyWrapperClasses = [
-    "overflow-x-auto",
+    "overflow-x-auto bg-card",
     isAiry ? "px-6 py-5" : "px-4 py-3",
   ].join(" ");
 
