@@ -11,7 +11,7 @@ max_output_tokens = 12000
 context_window = 1048576
 
 [browser]
-headless = false
+headless = true
 disable_security = true
 cdp_url = "http://localhost:9222"
 max_content_length = 2000
