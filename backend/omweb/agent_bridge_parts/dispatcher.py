@@ -1307,7 +1307,7 @@ def _resolve_chat_system_prompt(
     reasoning_effort: str,
     active_llm: Optional[Dict[str, Any]] = None,
     generative_ui: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
+) -> str:
     """
     Resolve chat system instructions following reasoning specifications.
 
@@ -1315,21 +1315,45 @@ def _resolve_chat_system_prompt(
     downstream OpenUI Lang directive (injected at Tier 1C of the context builder)
     is not contradicted by a conflicting 'Respond using Markdown' instruction.
     When Generative UI is disabled, the original Markdown directive is preserved.
+
+    [FIX-SYSTEM-PROMPT-ALWAYS-PRESENT] This function MUST ALWAYS return a
+    non-empty string. The previous implementation returned ``None`` when a
+    reasoning-capable model ran with ``reasoning_effort`` disabled ("none",
+    "off", "0"). Because ``reasoning_effort`` defaults to "none" for every
+    model the user has not explicitly configured, the ``None`` branch fired
+    for the entire class of reasoning-capable models whose reasoning was
+    either unset or explicitly turned off. The downstream chat pipeline
+    (``_build_optimized_chat_messages``) then emitted ZERO system messages,
+    leaving the model with no persona directive at all.
+
+    Chat-mode semantics are unambiguous: a reasoner running with reasoning
+    disabled behaves exactly like a regular chat model at the provider
+    level (no reasoning trace is produced). It therefore deserves the SAME
+    conversational prompt as a non-reasoning model. Only when reasoning is
+    actually ACTIVE do we prefer the concise variant.
+
+    The ``generative_ui`` dict is consulted inside BOTH variants so that
+    the GenUI path suppresses the "Respond using Markdown" clause (which
+    would otherwise contradict the OpenUI Lang directive injected by the
+    context builder at Tier 1C).
     """
     is_reasoner = _is_reasoning_model(model_name, active_llm=active_llm)
     norm_effort = (reasoning_effort or "none").lower().strip()
     genui_enabled = bool(generative_ui and generative_ui.get("enabled"))
 
-    if is_reasoner and norm_effort in ("none", "off", "0"):
-        return None
-    elif is_reasoner:
+    # "Reasoning is actually active" — the ONLY condition that justifies
+    # the concise variant. A reasoner with effort="none"/"off"/"0" is
+    # treated as a normal chat model (conversational variant).
+    reasoning_active = is_reasoner and norm_effort not in ("none", "off", "0")
+
+    if reasoning_active:
         if genui_enabled:
-            return "You are a helpful and concise assistant. Respond naturally and directly."
-        return "You are a helpful and concise assistant. Respond naturally and directly using Markdown."
+            return "You are Peldrun a helpful Assistant, and concise assistant. Respond naturally and directly."
+        return "You are Peldrun a helpful Assistant, and concise assistant. Respond naturally and directly using Markdown."
     else:
         if genui_enabled:
-            return "You are a helpful, direct, and conversational AI assistant. Respond naturally and directly."
-        return "You are a helpful, direct, and conversational AI assistant. Respond directly and accurately using Markdown."
+            return "You are Peldrun a helpful Assistant, direct, and conversational AI assistant. Respond naturally and directly."
+        return "You are Peldrun a helpful Assistant, direct, and conversational AI assistant. Respond directly and accurately using Markdown."
 
 
 def _build_optimized_chat_messages(
@@ -1338,18 +1362,31 @@ def _build_optimized_chat_messages(
     model_name: str,
     reasoning_effort: str,
     active_llm: Optional[Dict[str, Any]] = None,
+    generative_ui: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """
     Construct chat completion messages for conversational pipelines.
+
+    [FIX-SYSTEM-PROMPT-ALWAYS-PRESENT] ``generative_ui`` is now forwarded
+    to ``_resolve_chat_system_prompt`` so the GenUI-aware variant is
+    actually selected when the user has it enabled. Before this change
+    the argument was silently absent, forcing ``genui_enabled=False``
+    in every chat run.
+
+    The ``system`` role is appended unconditionally. This is safe because
+    ``_resolve_chat_system_prompt`` is contractually guaranteed to return
+    a non-empty string after the companion fix in this file. The previous
+    ``if sys_prompt:`` guard silently dropped the system role whenever the
+    resolver returned ``None`` — masking the root cause.
     """
     messages: List[Dict[str, str]] = []
     sys_prompt = _resolve_chat_system_prompt(
         model_name=model_name,
         reasoning_effort=reasoning_effort,
         active_llm=active_llm,
+        generative_ui=generative_ui,
     )
-    if sys_prompt:
-        messages.append({"role": "system", "content": sys_prompt})
+    messages.append({"role": "system", "content": sys_prompt})
 
     for t in turns[-6:]:
         p = t.get("prompt")
