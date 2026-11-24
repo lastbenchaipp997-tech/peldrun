@@ -147,6 +147,7 @@ span[aria-hidden="true"] > svg {
   }
 }
 
+
 [dir="rtl"] {
   font-family: var(--font-arabic), var(--font-sans), system-ui, sans-serif;
   --font-sans: 'Cairo', sans-serif;
@@ -287,4 +288,8 @@ span[aria-hidden="true"] > svg {
 
 .basis-full{
       max-width: 100% !important;
+}
+.thought p, .observation p{
+  font-size: 14px !important;
+  line-height: 22px !important;
 }

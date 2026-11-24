@@ -395,7 +395,7 @@ function TimelineToolCall({
             </span>
           </span>
         ) : (
-          <span className="text-muted-foreground">{displayContent}</span>
+          <span className="text-muted-foreground !text-[12px] font-mono">{displayContent}</span>
         )}
       </div>
 
@@ -633,7 +633,7 @@ function ChatTimelineInner({
                   .map((evt) => (
                   <div key={evt.id} className="text-xs space-y-1">
                     {evt.type === "thought" && (
-                      <div className="flex items-start gap-2.5 p-3 rounded-lg bg-card border border-border/80 text-foreground shadow-peldrun-xs">
+                      <div className="thought flex items-start gap-2.5 p-3 rounded-lg bg-card border border-border/80 text-foreground shadow-peldrun-xs">
                         <BrainCircuit size={15} className="text-peldrun-accent mt-0.5 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <MarkdownRenderer content={evt.content} />
@@ -669,7 +669,7 @@ function ChatTimelineInner({
                     )}
 
                     {evt.type === "observation" && (
-                      <div className="p-2.5 text-xs font-mono text-foreground/90 bg-muted/20 rounded-md border border-border flex items-start gap-2">
+                      <div className="observation p-2.5 text-xs font-mono text-foreground/90 bg-muted/20 rounded-md border border-border flex items-start gap-2">
                         <Terminal size={13} className="mt-0.5 flex-shrink-0 text-peldrun-success" />
                         <div className="flex-1 min-w-0 overflow-x-auto">
                           <MarkdownRenderer content={evt.content} />

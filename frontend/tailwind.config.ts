@@ -27,7 +27,7 @@ const config: Config = {
      fontSize: {
         'xxs':   ['0.775rem',  { lineHeight: '1.5' }],   // 14px
         'xs':   ['0.875rem',  { lineHeight: '1.5' }],   // 14px
-        'sm':   ['1rem',      { lineHeight: '1.6' }],   // 16px
+        'sm':   ['1rem',      { lineHeight: '1.8rem !important' }],   // 16px
         'base': ['1.125rem',  { lineHeight: '1.7' }],   // 18px
         'lg':   ['1.25rem',   { lineHeight: '1.7' }],   // 20px
         'xl':   ['1.5rem',    { lineHeight: '1.7' }],   // 24px
