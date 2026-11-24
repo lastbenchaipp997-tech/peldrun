@@ -149,6 +149,9 @@ class _CreateRequest:
     use_worktree: bool
     depth: Optional[int]
     reuse_existing_branch: bool
+    # Bare repository name (no namespace). Used to derive the
+    # subfolder name inside a chat-scoped `target_path`.
+    repository_name: Optional[str] = None
     metadata: Dict[str, object] = field(default_factory=dict)
     auth_token: Optional[str] = None
 
@@ -809,8 +812,16 @@ class GitWorkspaceManager:
         )
 
         if target_path:
-            # Use the provided target path (e.g., chat session files directory)
-            workspace_path = target_path
+            # `target_path` is the chat's `files/` directory. Treat
+            # it as a CONTAINER and clone the repository into a
+            # dedicated subfolder named after it, so that multiple
+            # repositories (and the chat's own uploaded files)
+            # never share the same directory. Deriving the subfolder
+            # from the request (rather than appending a fixed
+            # identifier) produces a stable, human-readable name
+            # such as `files/peldrun/` for `peldrun/peldrun`.
+            folder_name = self._derive_repository_folder_name(request)
+            workspace_path = target_path / folder_name
             workspace_path.mkdir(parents=True, exist_ok=True)
         else:
             workspace_path = self._derive_workspace_path(
@@ -951,17 +962,207 @@ class GitWorkspaceManager:
                 self._save_registry()
                 self._write_workspace_marker(updated)
 
+    def _find_marker_in_container(
+        self, container: Path, workspace_id: str
+    ) -> Optional[WorkspaceRef]:
+        """
+        Locate a workspace marker inside `container` or any of its
+        immediate subdirectories.
+
+        Two layouts are supported:
+
+            1. Legacy: `container/.peldrun/workspace.json` — the
+               repository was cloned directly into the chat's
+               `files/` folder. This layout is still present on
+               machines that upgraded from a PELDRUN version that
+               predates per-repository subfolders.
+            2. Modern: `container/<repo>/.peldrun/workspace.json` —
+               the repository was cloned into a repository-named
+               subfolder (e.g. `files/peldrun/`). This is the
+               current layout and is expected for every workspace
+               created after the subfolder change.
+
+        The subdirectory scan is bounded to a single level and
+        pre-filtered on the presence of a `.git` directory: the
+        majority of children under `files/` are user uploads,
+        `node_modules` folders, or other non-repository content
+        whose marker lookup would read `.peldrun/workspace.json`
+        from a directory that cannot possibly contain one.
+        """
+        if not container.exists():
+            return None
+
+        candidates: List[Path] = [container]
+        try:
+            for child in container.iterdir():
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("."):
+                    continue
+                if not (child / ".git").exists():
+                    continue
+                candidates.append(child)
+        except OSError:
+            return None
+
+        for candidate in candidates:
+            marker = self._read_workspace_marker(candidate)
+            if not marker or marker.get("workspace_id") != workspace_id:
+                continue
+            recovered = self._deserialize_workspace(marker)
+            if recovered is None:
+                continue
+            # Trust the actual path over the marker content so a
+            # tampered marker cannot redirect workspace operations
+            # elsewhere.
+            return replace(
+                recovered,
+                workspace_path=str(candidate.resolve()),
+            )
+        return None
+
+    def _project_workspace_containers(self) -> List[Path]:
+        """
+        Return the workspace container directory for every project
+        known to the project manager.
+
+        Internal projects:
+            ``<storage>/projects/<project_id>/workspace/``
+
+            Derived from ``project_manager.storage_dir`` rather than
+            a hardcoded relative path, so a deployment that moved
+            the storage root (via ``STORAGE_ROOT``) still resolves
+            the correct location.
+
+        External projects:
+            ``<project.workspace_path>`` — the absolute path the
+            user chose when creating the project. Resolved through
+            ``expanduser().resolve()`` so a path such as
+            ``~/repos/myapp`` or a Windows drive letter
+            (``D:\\myproject``) is normalized exactly once.
+
+        The returned list is deduplicated and contains only paths
+        that actually exist on disk. Missing external paths are
+        silently skipped: an external project whose directory was
+        removed should not prevent discovery of healthy
+        workspaces belonging to other projects.
+
+        A failure to import ``omweb.project_manager`` (test
+        harnesses, isolated deployments) yields an empty list,
+        which is safe: the caller falls back to the storage-tree
+        scan for legacy layouts.
+        """
+        containers: List[Path] = []
+        seen: set[str] = set()
+
+        try:
+            from omweb.project_manager import project_manager
+        except ImportError:
+            return containers
+
+        try:
+            projects = project_manager.list_projects()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "_project_workspace_containers: list_projects "
+                "failed: %s",
+                type(exc).__name__,
+            )
+            return containers
+
+        for project in projects or ():
+            if not isinstance(project, dict):
+                continue
+
+            ws_type = str(
+                project.get("workspace_type") or "internal"
+            ).strip().lower()
+
+            resolved: Optional[Path] = None
+            if ws_type == "external":
+                raw_path = project.get("workspace_path")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    continue
+                try:
+                    resolved = Path(raw_path).expanduser().resolve()
+                except (OSError, RuntimeError) as exc:
+                    logger.warning(
+                        "_project_workspace_containers: could not "
+                        "resolve external workspace_path %r: %s",
+                        raw_path,
+                        type(exc).__name__,
+                    )
+                    continue
+            else:
+                project_id = project.get("id")
+                if (
+                    not isinstance(project_id, str)
+                    or not project_id
+                ):
+                    continue
+                try:
+                    resolved = (
+                        project_manager.storage_dir
+                        / "projects"
+                        / project_id
+                        / "workspace"
+                    ).resolve()
+                except (OSError, RuntimeError) as exc:
+                    logger.warning(
+                        "_project_workspace_containers: could not "
+                        "resolve internal workspace for %r: %s",
+                        project_id,
+                        type(exc).__name__,
+                    )
+                    continue
+
+            if resolved is None:
+                continue
+            if not resolved.exists() or not resolved.is_dir():
+                # A workspace directory that has not been
+                # materialized yet, or was removed after the
+                # project entry survived, is not a valid container.
+                continue
+
+            try:
+                key = str(resolved)
+            except (OSError, ValueError):
+                key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            containers.append(resolved)
+
+        return containers
+
     def _discover_workspace_on_disk(
         self, workspace_id: str
     ) -> Optional[WorkspaceRef]:
         """
         Locate an existing workspace by scanning disk.
 
-        Search order:
+        Search order, from most specific to least specific:
+
             1. `_policy.root` — legacy name-based discovery for
                workspaces created without a custom `target_path`.
-            2. `storage/chats/<chat>/files/.peldrun/workspace.json`.
-            3. `storage/projects/<proj>/chats/<chat>/files/.peldrun/workspace.json`.
+            2. Project workspaces — the CONTAINER directory for
+               each project (internal or external), with the
+               marker located either at the container root
+               (legacy) or inside a repository subfolder
+               (modern). This is the primary location after the
+               Project Workspace integration and is scanned
+               before the storage tree so that a repository that
+               lives in `<project>/workspace/<repo>/` is found
+               even when the chat-scoped storage tree contains
+               unrelated files at the same chat ID.
+            3. `storage/chats/<chat>/files/[<repo>/].peldrun/workspace.json`.
+            4. `storage/projects/<proj>/chats/<chat>/files/[<repo>/].peldrun/workspace.json`.
+
+        The `[<repo>/]` segment is optional: legacy workspaces put
+        the marker directly under `files/`, while workspaces
+        produced by the current subfolder layout put it one level
+        deeper. Both are recognized by
+        `_find_marker_in_container`.
         """
 
         # 1) Legacy name-based scan under the policy root.
@@ -985,7 +1186,33 @@ class GitWorkspaceManager:
             except OSError:
                 pass
 
-        # 2) + 3) Marker-driven scan under the storage tree.
+        # 2) Project workspace scan.
+        #
+        # Both internal projects (`storage/projects/<pid>/workspace/`)
+        # and external projects (arbitrary absolute
+        # `<project.workspace_path>`) are containers for one or
+        # more repository subfolders. External paths are
+        # enumerated dynamically because the user may have chosen
+        # any location on any drive; hardcoding a scan root would
+        # miss every external workspace.
+        #
+        # `_find_marker_in_container` already tries the container
+        # itself (legacy one-repo layout) before walking its
+        # immediate subfolders (modern per-repository layout), so
+        # this loop is layout-agnostic.
+        for container in self._project_workspace_containers():
+            found = self._find_marker_in_container(
+                container, workspace_id
+            )
+            if found is not None:
+                return found
+
+        # 3) + 4) Marker-driven scan under the storage tree.
+        #
+        # Each chat's `files/` directory is inspected as a
+        # container: both the directory itself (legacy layout) and
+        # any direct child that looks like a Git working tree
+        # (modern subfolder layout) are checked for a marker.
         for root in self._storage_roots():
             chats_dir = root / "chats"
             if chats_dir.exists():
@@ -993,31 +1220,11 @@ class GitWorkspaceManager:
                     for chat_dir in chats_dir.iterdir():
                         if not chat_dir.is_dir():
                             continue
-                        files_dir = chat_dir / "files"
-                        if not files_dir.exists():
-                            continue
-                        marker = self._read_workspace_marker(
-                            files_dir
+                        found = self._find_marker_in_container(
+                            chat_dir / "files", workspace_id
                         )
-                        if (
-                            marker
-                            and marker.get("workspace_id")
-                            == workspace_id
-                        ):
-                            recovered = self._deserialize_workspace(
-                                marker
-                            )
-                            if recovered is not None:
-                                # Trust the actual path over the
-                                # marker content so a tampered
-                                # marker cannot redirect workspace
-                                # operations elsewhere.
-                                return replace(
-                                    recovered,
-                                    workspace_path=str(
-                                        files_dir.resolve()
-                                    ),
-                                )
+                        if found is not None:
+                            return found
                 except OSError:
                     pass
 
@@ -1033,27 +1240,11 @@ class GitWorkspaceManager:
                         for chat_dir in p_chats.iterdir():
                             if not chat_dir.is_dir():
                                 continue
-                            files_dir = chat_dir / "files"
-                            if not files_dir.exists():
-                                continue
-                            marker = (
-                                self._read_workspace_marker(files_dir)
+                            found = self._find_marker_in_container(
+                                chat_dir / "files", workspace_id
                             )
-                            if (
-                                marker
-                                and marker.get("workspace_id")
-                                == workspace_id
-                            ):
-                                recovered = (
-                                    self._deserialize_workspace(marker)
-                                )
-                                if recovered is not None:
-                                    return replace(
-                                        recovered,
-                                        workspace_path=str(
-                                            files_dir.resolve()
-                                        ),
-                                    )
+                            if found is not None:
+                                return found
                 except OSError:
                     pass
 
@@ -1304,6 +1495,7 @@ class GitWorkspaceManager:
             repo.provider if repo else provider
         )
         resolved_clone_url = clone_url or (repo.clone_url if repo else None)
+        resolved_repository_name = _extract_repository_name(repo)
 
         if not resolved_repository_id:
             raise ValidationError(
@@ -1325,6 +1517,7 @@ class GitWorkspaceManager:
             use_worktree=bool(use_worktree),
             depth=depth,
             reuse_existing_branch=bool(reuse_existing_branch),
+            repository_name=resolved_repository_name,
             metadata=dict(metadata or {}),
             auth_token=auth_token,
         )
@@ -1353,6 +1546,34 @@ class GitWorkspaceManager:
         # Validate before creation. `must_exist=False` allows paths
         # that do not exist yet.
         return self._policy.resolve_within_root(candidate, must_exist=False)
+
+    def _derive_repository_folder_name(
+        self, request: _CreateRequest
+    ) -> str:
+        """
+        Return the subfolder name to use inside a chat-scoped
+        `target_path`.
+
+        Preference order:
+            1. ``request.repository_name`` — populated from
+               ``RepositoryRef.name`` when the resolver succeeded.
+            2. The trailing path segment of ``request.clone_url`` —
+               ``peldrun`` for ``https://github.com/peldrun/peldrun.git``.
+            3. ``request.repository_id`` — last resort; only used
+               when neither of the above produced a value.
+        """
+        candidate = request.repository_name
+        if not candidate and request.clone_url:
+            candidate = _repository_name_from_url(request.clone_url)
+        if not candidate:
+            candidate = request.repository_id
+        try:
+            safe = sanitize_repository_name(
+                namespace=None, name=str(candidate), max_length=60
+            )
+            return safe or "repo"
+        except Exception:  # noqa: BLE001
+            return "repo"
 
     # --- Internal: materialization -------------------------------------
 
@@ -1918,6 +2139,55 @@ class GitWorkspaceManager:
 
 #: Characters that indicate embedded credentials in a URL.
 _URL_CREDS_PATTERN = r"://[^/@]+@"
+
+
+def _extract_repository_name(
+    repo: Optional[RepositoryRef],
+) -> Optional[str]:
+    """
+    Return the bare repository name from a ``RepositoryRef``.
+
+    Provider adapters expose ``full_name`` as ``owner/repo`` and
+    ``name`` as the bare slug. Only the bare slug is usable as a
+    folder name: a ``/`` would create a nested directory
+    hierarchy, and ``owner`` alone would collide across
+    repositories owned by different namespaces. The function is
+    defensive against schema drift via ``getattr`` so a renamed
+    field (or a ``RepositoryRef`` that exposes only ``full_name``)
+    does not break workspace creation.
+    """
+    if repo is None:
+        return None
+    for attr in ("name", "repository_name"):
+        value = getattr(repo, attr, None)
+        if value:
+            return str(value)
+    full = getattr(repo, "full_name", None)
+    if full:
+        return str(full).rsplit("/", 1)[-1]
+    return None
+
+
+def _repository_name_from_url(clone_url: str) -> Optional[str]:
+    """
+    Extract the bare repository name from a Git clone URL.
+
+    Handles ``https://...``, ``ssh://...``, and SCP-style
+    ``git@host:owner/repo.git`` URLs. Returns ``None`` when the
+    URL does not end with a plausible path segment.
+    """
+    if not clone_url:
+        return None
+    url = clone_url.strip().rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+    # SCP-style URLs use ':' to separate host from path; HTTPS and
+    # SSH scheme URLs use '/'. Splitting on both, keeping the last
+    # segment, works for every supported form.
+    for sep in ("/", ":"):
+        if sep in url:
+            url = url.rsplit(sep, 1)[-1]
+    return url or None
 
 
 def _strip_url_credentials(url: str) -> str:

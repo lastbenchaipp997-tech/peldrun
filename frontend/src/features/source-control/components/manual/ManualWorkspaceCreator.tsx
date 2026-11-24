@@ -66,8 +66,13 @@ export function ManualWorkspaceCreator() {
         <p className="text-xs text-muted-foreground mb-4">
           This will clone{" "}
           <strong>{repository?.full_name ?? "(no repository selected)"}</strong>{" "}
-          into the files folder of chat{" "}
+          into a dedicated folder named{" "}
+          <code className="font-mono text-[11px]">
+            {repository?.name ?? "repo"}
+          </code>{" "}
+          inside the workspace of chat{" "}
           <code className="font-mono text-[11px]">{chatId ?? "unknown"}</code>.
+          Existing files in that workspace are left untouched.
         </p>
       </div>
 
@@ -79,14 +84,20 @@ export function ManualWorkspaceCreator() {
             <p className="font-medium">Before you continue:</p>
             <ul className="mt-1 list-disc list-inside space-y-0.5">
               <li>
-                If this chat already has files, they may conflict with the
-                clone.
+                The repository is cloned into its own
+                repository-named subfolder, so existing files in the
+                workspace cannot collide with the clone.
               </li>
               <li>
-                It is recommended to use a fresh chat for source-control
-                work.
+                If this repository was already cloned in the same
+                workspace (for example, from another chat in the same
+                project), the operation will be refused instead of
+                overwriting it.
               </li>
-              <li>Your existing files will not be deleted automatically.</li>
+              <li>
+                Your existing files will not be deleted or modified
+                automatically.
+              </li>
             </ul>
             <button
               type="button"
@@ -114,6 +125,12 @@ export function ManualWorkspaceCreator() {
         <div>
           <span className="text-muted-foreground">Target chat:</span>{" "}
           <span className="font-mono">{chatId ?? "—"}</span>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Repository folder:</span>{" "}
+          <span className="font-mono">
+            {repository?.name ? `${repository.name}/` : "—"}
+          </span>
         </div>
       </div>
 

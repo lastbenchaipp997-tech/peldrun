@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { Highlight, themes } from "prism-react-renderer";
 import { AlertCircle, FileText } from "lucide-react";
+import { useTheme } from "@/components/layout/theme-provider";
 import { sourceControlClient } from "../../api/source-control-client";
 import type { FileContentAtRefResponse } from "../../api/schemas";
 
@@ -35,9 +36,22 @@ export interface FileViewerProps {
  *   intentionally out of scope here.
  */
 export function FileViewer({ workspaceId, ref, path }: FileViewerProps) {
+  const { theme } = useTheme();
   const [data, setData] = useState<FileContentAtRefResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Resolve the effective dark/light mode. Handles the "system" theme by
+  // consulting the OS-level color-scheme preference so the syntax theme
+  // tracks the same mode the rest of the UI is rendering in.
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" &&
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  // Pick the matching Prism theme for the current mode.
+  const codeTheme = isDark ? themes.vsDark : themes.vsLight;
 
   useEffect(() => {
     if (!workspaceId || !ref || !path) {
@@ -129,7 +143,7 @@ export function FileViewer({ workspaceId, ref, path }: FileViewerProps) {
 
         {!loading && !error && data && !data.is_binary && (
           <Highlight
-            theme={themes.vsDark}
+            theme={codeTheme}
             code={data.content ?? ""}
             language={language}
           >

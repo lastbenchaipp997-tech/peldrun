@@ -23,6 +23,10 @@ export function AuthReconnectBanner() {
 
   const [connectedInfo, setConnectedInfo] = useState<{ username: string; sourceLabel: string | null } | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  // Tracks whether the backend confirmed the current credential is rejected (HTTP 401).
+  // Once true, connection records returned by listConnections() are treated as stale
+  // until a new authorization completes successfully.
+  const [tokenRejected, setTokenRejected] = useState(false);
 
   const pollTimerRef = useRef<number | null>(null);
   const lastConnRef = useRef<string | null>(null);
@@ -31,8 +35,15 @@ export function AuthReconnectBanner() {
     void auth.refresh();
   }, []);
 
-  // Fetch connection directly from API
+  // Fetch connection directly from API.
+  // Skips while `tokenRejected` is true because listConnections() may still return a
+  // stale record whose token is no longer valid.
   useEffect(() => {
+    if (tokenRejected) {
+      setConnectedInfo(null);
+      return;
+    }
+
     let isMounted = true;
     sourceControlClient.listConnections()
       .then((connections) => {
@@ -53,52 +64,58 @@ export function AuthReconnectBanner() {
       });
 
     return () => { isMounted = false; };
-  }, [auth.status, auth.deviceFlow.phase]);
+  }, [auth.status, auth.deviceFlow.phase, tokenRejected]);
 
-  // Clear stale 401 errors and force panels to remount when connected
+  // Only clear the reconnect state when the connection identity actually changes.
+  // Relying on object identity caused `auth.refresh()` (triggered by a 401) to silently
+  // reset `needsReconnect` while the credential was still invalid.
   useEffect(() => {
     const conn = auth.status?.providers?.github?.connection;
-    if (conn) {
-      setNeedsReconnect(false);
-      setMessage(null);
-      auth.dismissError(); // Clear auth hook errors
-
-      const connKey = `${conn.account_id ?? ""}:${conn.username ?? ""}`;
-      if (lastConnRef.current !== connKey) {
-        lastConnRef.current = connKey;
-        // This forces SourceControlPanel to remount ManualModePanel, clearing the red error
-        window.dispatchEvent(new CustomEvent("peldrun:auth-reconnected"));
-      }
-    } else {
+    if (!conn) {
       lastConnRef.current = null;
+      return;
     }
+
+    const connKey = `${conn.account_id ?? ""}:${conn.username ?? ""}`;
+    if (lastConnRef.current === connKey) return;
+
+    lastConnRef.current = connKey;
+    setTokenRejected(false);
+    setNeedsReconnect(false);
+    setMessage(null);
+    auth.dismissError(); // Clear auth hook errors
+
+    // This forces SourceControlPanel to remount ManualModePanel, clearing the red error
+    window.dispatchEvent(new CustomEvent("peldrun:auth-reconnected"));
   }, [auth.status?.providers?.github?.connection]);
 
-  // Listen for 401s from the API client
+  // Listen for 401s from the API client.
+  // A 401 is authoritative: it means the stored credential was rejected, even if
+  // listConnections() still reports an active connection for the account.
   useEffect(() => {
     const onAuthRequired = (e: Event) => {
       if (localPhase !== "idle" || auth.deviceFlow.phase !== "idle") return;
 
-      if (connectedInfo) {
-        void auth.refresh();
-        return;
-      }
-
       const detail = (e as CustomEvent<{ message?: string }>).detail || {};
+      setTokenRejected(true);
       setNeedsReconnect(true);
+      setConnectedInfo(null);
       setMessage(detail.message || null);
+      void auth.refresh();
     };
     window.addEventListener("peldrun:auth-required", onAuthRequired);
     return () => window.removeEventListener("peldrun:auth-required", onAuthRequired);
-  }, [localPhase, auth.deviceFlow.phase, connectedInfo]);
+  }, [localPhase, auth.deviceFlow.phase]);
 
   // Monitor Device Flow for completion
   useEffect(() => {
     if (auth.deviceFlow.phase === "completed") {
+      setTokenRejected(false);
       setNeedsReconnect(false);
       setMessage(null);
       setLocalPhase("success");
       setDismissed(false);
+      void auth.refresh();
 
       window.setTimeout(() => {
         setLocalPhase("idle");
@@ -148,6 +165,7 @@ export function AuthReconnectBanner() {
         attempts++;
         const connections = await auth.refresh().then(() => true).catch(() => false);
         if (connections && auth.status?.providers?.github?.connection) {
+          setTokenRejected(false);
           setNeedsReconnect(false);
           setLocalPhase("idle");
           setDismissed(false);
@@ -171,6 +189,8 @@ export function AuthReconnectBanner() {
 
   const showConnectedNotice =
     !dismissed &&
+    !needsReconnect &&
+    !tokenRejected &&
     connectedInfo !== null &&
     localPhase === "idle";
 

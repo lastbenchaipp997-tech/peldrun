@@ -1,6 +1,6 @@
 // frontend/src/features/source-control/components/git/GitBrowserPanel.tsx
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   CircleDot,
   FileText,
@@ -17,6 +17,7 @@ import { TagManager } from "./TagManager";
 import { PullRequestPanel } from "../github/PullRequestPanel";
 import { IssuePanel } from "../github/IssuePanel";
 import { ReleaseManager } from "../github/ReleaseManager";
+import { WorkspaceSelector } from "../WorkspaceSelector";
 import type { WorkspaceResponse } from "../../api/schemas";
 
 export interface GitBrowserPanelProps {
@@ -26,6 +27,30 @@ export interface GitBrowserPanelProps {
   currentBranch: string;
   /** Called when a branch checkout updates the workspace. */
   onWorkspaceUpdated?: (ws: WorkspaceResponse) => void;
+  /**
+   * Chat whose visible repositories can be listed in the header
+   * selector. Required only when `showWorkspaceSelector` is true.
+   */
+  chatId?: string | null;
+  /**
+   * Project whose hosted repositories can be listed in the header
+   * selector. Used when `chatId` is not available.
+   */
+  projectId?: string | null;
+  /**
+   * When true, render a compact `WorkspaceSelector` in the tab
+   * bar. The parent component controls this flag; `GitBrowserPanel`
+   * never decides on its own, because whether a selector makes
+   * sense depends on how many workspaces the chat/project hosts.
+   */
+  showWorkspaceSelector?: boolean;
+  /**
+   * Called when the user picks a different workspace from the
+   * header selector. The parent (`BrowsePanel`) is responsible for
+   * re-resolving and re-passing `workspaceId`, `repositoryId`,
+   * `provider`, and `currentBranch`.
+   */
+  onWorkspaceSwitch?: (ws: WorkspaceResponse) => void;
 }
 
 type Tab =
@@ -60,10 +85,25 @@ export function GitBrowserPanel({
   provider = "github",
   currentBranch,
   onWorkspaceUpdated,
+  chatId,
+  projectId,
+  showWorkspaceSelector = false,
+  onWorkspaceSwitch,
 }: GitBrowserPanelProps) {
   const [tab, setTab] = useState<Tab>("files");
   const [browseRef, setBrowseRef] = useState("HEAD");
   const [localBranch, setLocalBranch] = useState(currentBranch);
+
+  // Reset the tab-local state when the parent switches to a
+  // different workspace. Without this, switching from `peldrun`
+  // (which may have commits on `main` at a certain SHA) to
+  // `another-repo` would leave the Files tab pointing at a SHA
+  // that does not exist in `another-repo`, producing a confusing
+  // "ref not found" error until the user manually resets it.
+  useEffect(() => {
+    setLocalBranch(currentBranch);
+    setBrowseRef("HEAD");
+  }, [workspaceId, currentBranch]);
 
   return (
     <div className="flex flex-col h-full">
@@ -112,22 +152,37 @@ export function GitBrowserPanel({
           label="Releases"
         />
 
-        {tab === "files" && (
-          <div className="ml-auto flex items-center gap-1.5">
-            <span className="text-[10px] text-muted-foreground">
-              ref:
-            </span>
-            <input
-              type="text"
-              value={browseRef}
-              onChange={(e) =>
-                setBrowseRef(e.target.value || "HEAD")
-              }
-              className="text-[11px] w-32 px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary font-mono"
-              spellCheck={false}
+        <div className="ml-auto flex items-center gap-1.5">
+          {showWorkspaceSelector && (
+            <WorkspaceSelector
+              chatId={chatId}
+              projectId={projectId}
+              compact
+              onSelect={(ws) => {
+                if (ws.workspace_id !== workspaceId) {
+                  onWorkspaceSwitch?.(ws);
+                }
+              }}
             />
-          </div>
-        )}
+          )}
+
+          {tab === "files" && (
+            <>
+              <span className="text-[10px] text-muted-foreground">
+                ref:
+              </span>
+              <input
+                type="text"
+                value={browseRef}
+                onChange={(e) =>
+                  setBrowseRef(e.target.value || "HEAD")
+                }
+                className="text-[11px] w-32 px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                spellCheck={false}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {/* Content */}

@@ -11,6 +11,8 @@ import { ManualWorkspaceCreator } from "./ManualWorkspaceCreator";
 import { ManualEditingGuide } from "./ManualEditingGuide";
 import { ManualDiffReview } from "./ManualDiffReview";
 import { ManualPushButton } from "./ManualPushButton";
+import { WorkspaceSelector } from "../WorkspaceSelector";
+import { useSourceControlStore } from "../../state/source-control-store";
 import {
   AlertCircle,
   CheckCircle2,
@@ -18,6 +20,7 @@ import {
   MessageSquare,
   RotateCcw,
   GitPullRequest,
+  ArrowLeftRight,
 } from "lucide-react";
 
 /**
@@ -102,7 +105,30 @@ export function ManualModePanel() {
     <div className="flex flex-col h-full bg-background">
       {/* Change Repository bar — only when a workspace exists */}
       {showChangeRepo && (
-        <div className="flex items-center justify-end px-4 py-2 border-b border-border bg-muted">
+        <div className="flex items-center justify-end gap-3 px-4 py-2 border-b border-border bg-muted">
+          {/* Switch: returns to "select-repo" without touching
+              disk. Useful when the project hosts multiple
+              repositories and the user simply wants to work in a
+              different one. */}
+          <button
+            type="button"
+            onClick={() => {
+              useManualModeStore.setState({
+                workspaceId: null,
+                step: "select-repo",
+                error: null,
+              });
+            }}
+            disabled={isDeleting}
+            className="flex items-center gap-1 text-xs text-rb hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ArrowLeftRight size={12} />
+            Switch workspace
+          </button>
+
+          {/* Delete: the original destructive action. Kept
+              separate so a user who only wants to switch does not
+              accidentally wipe their local files. */}
           <button
             type="button"
             onClick={handleChangeRepo}
@@ -117,7 +143,7 @@ export function ManualModePanel() {
             ) : (
               <>
                 <FolderX size={12} />
-                Change Repository
+                Delete workspace
               </>
             )}
           </button>
@@ -179,7 +205,7 @@ function StepBody({ step }: { step: ReturnType<typeof useManualModeStore.getStat
       return <IdleState />;
 
     case "select-repo":
-      return <ManualRepoSelector />;
+      return <RepoSelectionStep />;
 
     case "creating-workspace":
       // The "creating-workspace" step is navigation state; the
@@ -403,6 +429,101 @@ function IdleState() {
       <p className="mt-1 text-xs text-muted-foreground">
         Open this panel from within a chat to start a workflow.
       </p>
+    </div>
+  );
+}
+
+/**
+ * The "select-repo" step after the multi-workspace change.
+ *
+ * Behaviour depends on what is already on disk for the current
+ * chat's project:
+ *
+ *   - No workspaces yet → render `ManualRepoSelector` directly
+ *     (the historical behaviour): the user clones a repository
+ *     from GitHub into the project's workspace directory.
+ *
+ *   - One or more workspaces already exist → render
+ *     `WorkspaceSelector` first, so the user can pick the one
+ *     they want. A "Clone new" button below switches into the
+ *     `ManualRepoSelector` view so a project can grow by one more
+ *     repository without forcing the user to leave the flow.
+ *
+ * The "back" button in the clone view is shown only when there
+ * is something to return to, so the transition is never
+ * one-way.
+ */
+function RepoSelectionStep() {
+  const chatId = useManualModeStore((s) => s.chatId);
+  const setWorkspace = useManualModeStore((s) => s.setWorkspace);
+  const availableWorkspaces = useSourceControlStore(
+    (s) => s.availableWorkspaces
+  );
+  const isLoadingWorkspaces = useSourceControlStore(
+    (s) => s.isLoadingWorkspaces
+  );
+  const [showCloneFlow, setShowCloneFlow] = useState(false);
+
+  // When the list is loaded and empty, go directly to the clone
+  // flow. This preserves the historical onboarding path for a
+  // brand-new chat/project: the user does not have to click
+  // "Clone new" when "Clone new" is the only option.
+  useEffect(() => {
+    if (
+      !isLoadingWorkspaces &&
+      availableWorkspaces.length === 0 &&
+      !showCloneFlow
+    ) {
+      setShowCloneFlow(true);
+    }
+  }, [
+    isLoadingWorkspaces,
+    availableWorkspaces.length,
+    showCloneFlow,
+  ]);
+
+  if (showCloneFlow) {
+    return (
+      <div className="space-y-3">
+        {availableWorkspaces.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowCloneFlow(false)}
+            className="text-md font-bold text-rb hover:text-foreground"
+          >
+            ← Back to existing workspaces
+          </button>
+        )}
+        <ManualRepoSelector />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-black capitalize mb-1">
+          Select a repository
+        </h3>
+        <p className="text-xxs text-muted-foreground">
+          Pick an existing workspace, or clone a new repository
+          into this project.
+        </p>
+      </div>
+
+      <WorkspaceSelector
+        chatId={chatId}
+        onSelect={(ws) => setWorkspace(ws)}
+        onCreateRequest={() => setShowCloneFlow(true)}
+      />
+
+      <button
+        type="button"
+        onClick={() => setShowCloneFlow(true)}
+        className="w-full text-md font-bold text-rb hover:text-foreground"
+      >
+        Or clone a new repository from GitHub →
+      </button>
     </div>
   );
 }

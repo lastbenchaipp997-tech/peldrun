@@ -347,21 +347,73 @@ export const sourceControlClient = {
     );
   },
 
-    /**
-   * Resolves the source-control workspace bound to a specific project.
-   * Used by the Project Source Control panel to fetch repository metadata
-   * without relying on a specific chat session context.
+  /**
+   * Return EVERY workspace visible to a chat, newest first.
+   *
+   * Distinct from `getWorkspaceByChat`: that method returns the
+   * single workspace bound to the chat's container, while this
+   * method returns all repositories inside the container. For a
+   * chat inside a project, the container is the project's
+   * workspace directory, so this method returns every repository
+   * the project hosts, not just the one this chat created.
+   *
+   * The UI uses this list in `WorkspaceSelector` so the user can
+   * pick which repository to browse/diff/push. An empty array
+   * means "no workspace yet" and should trigger the create-
+   * workspace flow.
    */
-  async getWorkspaceByProject(projectId: string): Promise<WorkspaceResponse | null> {
+  async listWorkspacesByChat(
+    chatId: string
+  ): Promise<WorkspaceResponse[]> {
+    return request<WorkspaceResponse[]>(
+      `/workspaces/by-chat/${encodeURIComponent(chatId)}/all`
+    );
+  },
+
+  /**
+   * Return every workspace hosted by a project, newest first.
+   *
+   * This method addresses the project directly and works without
+   * a chat context. It is what the standalone
+   * `SourceControlWorkspacePanel` uses when opened from a project
+   * dashboard.
+   *
+   * Same response shape and semantics as `listWorkspacesByChat`.
+   */
+  async listWorkspacesByProject(
+    projectId: string
+  ): Promise<WorkspaceResponse[]> {
+    return request<WorkspaceResponse[]>(
+      `/workspaces/by-project/${encodeURIComponent(projectId)}`
+    );
+  },
+
+  /**
+   * Resolve THE primary workspace for a project, or null.
+   *
+   * This is a convenience wrapper over `listWorkspacesByProject`:
+   * it returns the first workspace (the oldest, per the backend's
+   * `created_at` ascending ordering). Callers that need every
+   * repository MUST use `listWorkspacesByProject` directly.
+   *
+   * The previous implementation called
+   * `/api/source-control/workspace?project_id=...`, an endpoint
+   * that does not exist in the router; every call produced a 404
+   * and the method silently returned `null`. The corrected
+   * implementation uses the `/workspaces/by-project/{id}` endpoint
+   * that the backend actually exposes.
+   */
+  async getWorkspaceByProject(
+    projectId: string
+  ): Promise<WorkspaceResponse | null> {
     try {
-      const res = await fetch(
-        `/api/source-control/workspace?project_id=${encodeURIComponent(projectId)}`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) return null;
-      return await res.json();
+      const workspaces = await this.listWorkspacesByProject(projectId);
+      return workspaces.length > 0 ? workspaces[0] : null;
     } catch (err) {
-      console.warn("[sourceControlClient] getWorkspaceByProject failed:", err);
+      console.warn(
+        "[sourceControlClient] getWorkspaceByProject failed:",
+        err
+      );
       return null;
     }
   },

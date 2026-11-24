@@ -145,7 +145,7 @@ export function RepositoryBrowser({
         </div>
 
         {/* Tree container (observed by ResizeObserver) */}
-        <div ref={containerRef} className="flex-1 overflow-hidden">
+        <div ref={containerRef} className="flex-1 overflow-hidden bg-sidebg pl-1">
           {loading && (
             <div className="p-3 text-xs text-muted-foreground">
               Loading…

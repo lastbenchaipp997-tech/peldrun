@@ -167,11 +167,40 @@ export const useManualModeStore = create<ManualModeState>((set) => ({
   setBranch: (branch) => set({ branch }),
 
   setWorkspace: (ws) =>
-    set({
-      workspaceId: ws.workspace_id,
-      branch: ws.current_branch,
-      step: "editing",
-      error: null,
+    set((state) => {
+      // When the caller is switching to a DIFFERENT workspace
+      // (e.g. picking `another-repo/` after working in
+      // `peldrun/`), the operation-specific state from the
+      // previous workspace must be cleared. Otherwise the next
+      // workflow inherits the previous workspace's operationId,
+      // approvalId, and diff — which point at a workspace that is
+      // no longer the active one, producing "workspace not found"
+      // errors the moment the user tries to approve or reject.
+      //
+      // The initial call (workspaceId was null) is a no-op for the
+      // clearing step: the operation fields are already empty, and
+      // the isDifferentWorkspace check is simply true.
+      const isDifferentWorkspace =
+        state.workspaceId !== ws.workspace_id;
+      return {
+        workspaceId: ws.workspace_id,
+        branch: ws.current_branch,
+        step: "editing",
+        error: null,
+        ...(isDifferentWorkspace && {
+          operationId: null,
+          approvalId: null,
+          diff: null,
+          approvalScope: "push_branch",
+          title: "",
+          description: "",
+          preferredBranchName: "",
+          // `forceProtectedPush` is a user preference for the
+          // workspace; it is preserved across switches so the
+          // user does not have to re-check it every time they
+          // move between repositories they own.
+        }),
+      };
     }),
 
   clearWorkspace: () =>

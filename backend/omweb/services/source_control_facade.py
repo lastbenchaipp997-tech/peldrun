@@ -2803,6 +2803,507 @@ class SourceControlFacade:
 
         return None
 
+    async def _resolve_workspace_base_dir(
+        self,
+        chat_id: Optional[str],
+        explicit_project_id: Optional[str] = None,
+    ) -> Path:
+        """
+        Resolve the base directory inside which a repository subfolder
+        will be created.
+
+        The workspace layout follows the entity that OWNS the chat:
+
+            1. Chat inside a project (internal) -> the project's
+               workspace directory, i.e.
+               ``storage/projects/<project_id>/workspace/``. This is
+               the same directory the Agent writes to and the same
+               directory the workspace file browser lists. Keeping
+               the Git repository here means the Agent edits the
+               files Git tracks without any filesystem indirection.
+
+            2. Chat inside a project (external) -> the project's
+               configured absolute ``workspace_path``. The user chose
+               that directory specifically so their existing files
+               (and any repository they already have there) would be
+               the working set; placing the Git subfolder elsewhere
+               would silently split the working set in two.
+
+            3. Chat NOT bound to a project -> the chat's own
+               ``files/`` directory. Standalone chats have no shared
+               workspace, so the repository must be scoped to the
+               chat itself.
+
+            4. No chat_id -> the facade's generic workspace root.
+               This path is only hit by callers that do not have a
+               chat context (agent tools in tests, migration
+               scripts). It preserves the historical behaviour.
+
+        In every case the returned directory is a CONTAINER: the
+        actual repository will be created as a subfolder inside it
+        (``<base>/<repository_name>/``). Existing repositories under
+        the container are untouched, so a project can host multiple
+        repositories side by side.
+
+        This method is the single source of truth for the base
+        directory. ``create_workspace``, ``get_workspace_by_chat``,
+        and ``delete_workspace`` all route through it, which is the
+        only way to guarantee they agree on where a chat's
+        workspace lives.
+        """
+        # Importing here rather than at module scope avoids a
+        # circular import: `omweb.project_manager` imports the
+        # config layer, which imports nothing from this module, so
+        # the import would actually be safe at module scope -- but
+        # keeping it local also makes it obvious to any reader
+        # that the project manager is a runtime dependency of the
+        # path resolution, not a design-time one.
+        try:
+            from omweb.project_manager import project_manager
+        except ImportError:
+            # Deployments that package the facade outside the
+            # `omweb` namespace (test harnesses, embedded
+            # applications) may not have `omweb` on the path. Fall
+            # back to the generic workspace root rather than fail
+            # outright: callers still get a usable workspace, just
+            # not a project-aware one.
+            logger.warning(
+                "_resolve_workspace_base_dir: omweb.project_manager "
+                "is unavailable; falling back to the generic "
+                "workspace root."
+            )
+            return self._workspace_root
+
+        # ---- 1. Explicit project_id wins when provided ----
+        #
+        # This path is used by callers that already know which
+        # project the workspace belongs to (e.g. a future API that
+        # creates a workspace outside of a chat context). It also
+        # gives tests a deterministic hook that does not require a
+        # chat session to exist.
+        if explicit_project_id:
+            project = project_manager.get_project(explicit_project_id)
+            if isinstance(project, dict):
+                resolved = self._workspace_dir_from_project(project)
+                if resolved is not None:
+                    return resolved
+
+        # ---- 2. Chat-bound project (or standalone chat) ----
+        if chat_id:
+            try:
+                chat_meta = project_manager.get_chat(chat_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "_resolve_workspace_base_dir: get_chat(%r) "
+                    "failed: %s",
+                    chat_id,
+                    type(exc).__name__,
+                )
+                chat_meta = None
+
+            # 2a. Resolve the chat's project_id.
+            #
+            # `get_chat` reads `session.json`, which is the
+            # authoritative source — but it can be missing or
+            # incomplete in several legitimate situations:
+            #
+            #   - The chat was created by a path that did not
+            #     persist `project_id` in `session.json`
+            #     (older versions of `save_chat_session`).
+            #   - The user opened the chat through a route that
+            #     provided a `job_id` while the index stores the
+            #     canonical `id` (the two are looked up in both
+            #     directions by `get_chat`, but a partial index
+            #     can still miss the link).
+            #   - A previous process crashed between the atomic
+            #     write of `session.json` and the update of
+            #     `index.json`.
+            #
+            # A silent fallback to the standalone-chat path in
+            # those cases is the wrong behaviour: the user is
+            # working inside a project, but the workspace is
+            # created/looked up in `chats/<cid>/files/` — which is
+            # empty. The fallback below scans the project index
+            # directly so that a chat whose `session.json` is
+            # missing its `project_id` is still correctly routed
+            # to its project's workspace.
+            resolved_project_id: Optional[str] = None
+            if isinstance(chat_meta, dict):
+                candidate = chat_meta.get("project_id")
+                if (
+                    isinstance(candidate, str)
+                    and candidate
+                    and candidate != "default_project"
+                ):
+                    resolved_project_id = candidate
+
+            if resolved_project_id is None:
+                # Fallback: scan the index for a chat whose `id`
+                # OR `job_id` matches `chat_id`. This is a linear
+                # scan over the index, which is small (hundreds
+                # of entries at most) and cached by
+                # `project_manager._read_index`; the cost is
+                # negligible compared to the disk I/O the rest of
+                # the call performs.
+                try:
+                    index = project_manager._read_index()
+                    for _entry in index.get("chats", []):
+                        if not isinstance(_entry, dict):
+                            continue
+                        if (
+                            str(_entry.get("id", "")) == chat_id
+                            or str(_entry.get("job_id", "")) == chat_id
+                        ):
+                            _candidate = _entry.get("project_id")
+                            if (
+                                isinstance(_candidate, str)
+                                and _candidate
+                                and _candidate != "default_project"
+                            ):
+                                resolved_project_id = _candidate
+                            break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "_resolve_workspace_base_dir: index scan "
+                        "for chat %r failed: %s",
+                        chat_id,
+                        type(exc).__name__,
+                    )
+
+            # 2b. If a project_id was resolved, use the project's
+            # workspace directory.
+            if resolved_project_id is not None:
+                project = project_manager.get_project(
+                    resolved_project_id
+                )
+                if isinstance(project, dict):
+                    resolved = self._workspace_dir_from_project(
+                        project
+                    )
+                    if resolved is not None:
+                        return resolved
+
+            # 2c. Standalone chat (or a project lookup that failed
+            # for an unexpected reason): use the chat's own files
+            # directory. Passing the resolved_project_id (if any)
+            # lets `get_chat_files_dir` build the canonical path
+            # even when `session.json` is incomplete.
+            try:
+                return project_manager.get_chat_files_dir(
+                    chat_id,
+                    resolved_project_id or "default_project",
+                ).resolve()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "_resolve_workspace_base_dir: could not "
+                    "resolve chat files dir for %r: %s",
+                    chat_id,
+                    type(exc).__name__,
+                )
+
+        # ---- 3. No usable context: generic workspace root ----
+        return self._workspace_root
+
+    def _workspace_dir_from_project(
+        self, project: Mapping[str, Any]
+    ) -> Optional[Path]:
+        """
+        Return the base directory for a project's workspace.
+
+        * Internal projects use the canonical
+          ``storage/projects/<project_id>/workspace/`` path.
+          The path is derived from the project ID rather than the
+          project's ``workspace_path`` field because that field is
+          intentionally empty for internal projects: treating an
+          empty string as a path would produce
+          ``storage/projects/<pid>/workspace/""/`` and silently
+          point at the wrong directory.
+        * External projects use the configured absolute
+          ``workspace_path``. An external project without a valid
+          path is a misconfiguration, so the method returns None
+          and the caller falls back to the chat's own directory
+          rather than writing to an arbitrary location.
+
+        Returns None on any resolution failure; the caller treats
+        None as "no project-level workspace available" and picks a
+        safer fallback.
+        """
+        project_id = project.get("id")
+        if not isinstance(project_id, str) or not project_id:
+            return None
+
+        workspace_type = str(
+            project.get("workspace_type") or "internal"
+        ).strip().lower()
+
+        if workspace_type == "external":
+            raw_path = project.get("workspace_path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                logger.warning(
+                    "_workspace_dir_from_project: project %r is "
+                    "external but has no workspace_path; falling "
+                    "back to the chat's own directory.",
+                    project_id,
+                )
+                return None
+            try:
+                resolved = Path(raw_path).expanduser().resolve()
+            except (OSError, RuntimeError) as exc:
+                logger.warning(
+                    "_workspace_dir_from_project: could not resolve "
+                    "external workspace_path %r for project %r: %s",
+                    raw_path,
+                    project_id,
+                    type(exc).__name__,
+                )
+                return None
+            # Verify the directory exists; do not create it here,
+            # because creating an external path requires explicit
+            # user consent (the project creation flow handles that
+            # and returns a clear error if it cannot).
+            if not resolved.is_dir():
+                logger.warning(
+                    "_workspace_dir_from_project: external "
+                    "workspace_path %r for project %r does not "
+                    "exist or is not a directory; falling back to "
+                    "the chat's own directory.",
+                    str(resolved),
+                    project_id,
+                )
+                return None
+            return resolved
+
+        # Internal (or unknown) -> canonical storage path.
+        try:
+            from omweb.project_manager import project_manager
+            return (
+                project_manager.storage_dir
+                / "projects"
+                / project_id
+                / "workspace"
+            ).resolve()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "_workspace_dir_from_project: could not resolve "
+                "internal workspace for project %r: %s",
+                project_id,
+                type(exc).__name__,
+            )
+            return None
+
+    def _list_workspace_refs_in_container(
+        self, container: Path
+    ) -> list[Any]:
+        """
+        Enumerate every Git workspace inside a container directory.
+
+        The container is the same one `_resolve_workspace_base_dir`
+        returns for a chat: `<project>/workspace/` for project
+        chats, `<chat>/files/` for standalone chats, or the
+        project's external workspace path. Inside it, each direct
+        subfolder that carries a `.git` directory (or a `.git`
+        file, for Git worktrees) and a valid
+        `.peldrun/workspace.json` marker is treated as one
+        workspace.
+
+        A workspace is only included when the manager can resolve
+        it (via `workspace_manager.get_workspace`). This filters
+        out orphan markers whose backing `.git` was removed and
+        whose workspace was already pruned from the registry by a
+        concurrent process. The manager's registry lookup also
+        transparently re-registers any marker that survived a
+        restart, which keeps the returned references' status
+        (branch / head_sha / is_clean) in sync with the on-disk
+        state.
+
+        Ordering is deterministic: workspaces are sorted by
+        `created_at` ascending, so the first workspace a project
+        ever received appears first. The UI uses this ordering to
+        present a stable list across re-renders.
+        """
+        results: list[Any] = []
+        if not container.exists() or not container.is_dir():
+            return results
+
+        candidate_dirs: list[Path] = []
+        try:
+            for child in container.iterdir():
+                if not child.is_dir():
+                    continue
+                if child.name.startswith("."):
+                    continue
+                git_path = child / ".git"
+                if not git_path.exists():
+                    continue
+                if not (
+                    child / ".peldrun" / "workspace.json"
+                ).exists():
+                    continue
+                candidate_dirs.append(child)
+        except OSError:
+            return results
+
+        # Also honor the legacy layout: the container itself is a
+        # workspace whose `.git` sits directly under it. This is
+        # rare after the subfolder change, but old installations
+        # that never migrated must not be silently ignored.
+        legacy_git = container / ".git"
+        legacy_marker = container / ".peldrun" / "workspace.json"
+        if legacy_git.exists() and legacy_marker.exists():
+            candidate_dirs.append(container)
+
+        for candidate in candidate_dirs:
+            try:
+                import json as _json
+                marker_data = _json.loads(
+                    (
+                        candidate / ".peldrun" / "workspace.json"
+                    ).read_text(encoding="utf-8")
+                )
+            except (OSError, _json.JSONDecodeError):
+                continue
+            if not isinstance(marker_data, dict):
+                continue
+            ws_id = marker_data.get("workspace_id")
+            if not isinstance(ws_id, str) or not ws_id:
+                continue
+            try:
+                ws_ref = self.workspace_manager.get_workspace(ws_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "_list_workspace_refs_in_container: could not "
+                    "resolve workspace %r: %s",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                continue
+            if ws_ref is not None:
+                results.append(ws_ref)
+
+        # De-duplicate: a legacy workspace would otherwise appear
+        # twice when the container itself is also caught by the
+        # child loop (defensive; the child loop skips dot-dirs).
+        seen_ids: set[str] = set()
+        unique_results: list[Any] = []
+        for ws in results:
+            if ws.workspace_id in seen_ids:
+                continue
+            seen_ids.add(ws.workspace_id)
+            unique_results.append(ws)
+
+        unique_results.sort(
+            key=lambda w: w.created_at or _utc_now()
+        )
+        return unique_results
+
+    async def list_workspaces_by_chat(
+        self, chat_id: str
+    ) -> list[WorkspaceResponse]:
+        """
+        Return every workspace visible to a chat, newest first.
+
+        The "visible" set is the set of repositories inside the
+        CONTAINER the chat resolves to, not the set of
+        repositories bound to the chat. This distinction is
+        deliberate: workspace ownership follows the PROJECT, not
+        the chat, so a chat inside a project sees every
+        repository the project hosts. A standalone chat sees only
+        the repositories inside its own `files/` directory.
+
+        Returns an empty list when:
+            - the chat's container does not exist yet,
+            - the container exists but is empty, or
+            - the chat_id cannot be resolved to a container.
+
+        The caller (UI) uses an empty list to decide whether to
+        prompt the user to create a first workspace.
+        """
+        if not chat_id:
+            return []
+        try:
+            container = await self._resolve_workspace_base_dir(
+                chat_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "list_workspaces_by_chat: could not resolve "
+                "container for chat %r: %s",
+                chat_id,
+                type(exc).__name__,
+            )
+            return []
+
+        refs = self._list_workspace_refs_in_container(container)
+        return [
+            WorkspaceResponse(
+                workspace_id=ws.workspace_id,
+                repository_id=ws.repository_id,
+                current_branch=ws.current_branch,
+                base_sha=ws.base_sha,
+                head_sha=ws.head_sha,
+                is_dirty=not ws.is_clean,
+                created_at=ws.created_at,
+            )
+            for ws in refs
+        ]
+
+    async def list_workspaces_by_project(
+        self, project_id: str
+    ) -> list[WorkspaceResponse]:
+        """
+        Return every workspace hosted by a project, newest first.
+
+        Unlike `list_workspaces_by_chat`, this method does not
+        need a chat: it addresses the project directly, which is
+        what the standalone `SourceControlWorkspacePanel` uses
+        when it is opened from a project dashboard (without a
+        specific chat context).
+
+        The container resolution mirrors
+        `_workspace_dir_from_project`: internal projects use the
+        canonical `storage/projects/<pid>/workspace/` directory;
+        external projects use their configured absolute path. An
+        unknown project, a project without a workspace directory,
+        or a project whose external path no longer exists yields
+        an empty list.
+        """
+        if not project_id:
+            return []
+        try:
+            from omweb.project_manager import project_manager
+        except ImportError:
+            return []
+        try:
+            project = project_manager.get_project(project_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "list_workspaces_by_project: get_project(%r) "
+                "failed: %s",
+                project_id,
+                type(exc).__name__,
+            )
+            return []
+        if not isinstance(project, dict):
+            return []
+
+        container = self._workspace_dir_from_project(project)
+        if container is None:
+            return []
+
+        refs = self._list_workspace_refs_in_container(container)
+        return [
+            WorkspaceResponse(
+                workspace_id=ws.workspace_id,
+                repository_id=ws.repository_id,
+                current_branch=ws.current_branch,
+                base_sha=ws.base_sha,
+                head_sha=ws.head_sha,
+                is_dirty=not ws.is_clean,
+                created_at=ws.created_at,
+            )
+            for ws in refs
+        ]
+
     async def create_workspace(
         self, payload: CreateWorkspaceRequest, chat_id: Optional[str] = None
     ) -> WorkspaceResponse:
@@ -2835,27 +3336,78 @@ class SourceControlFacade:
         )
         self.policy_engine.require(policy_ctx)
 
-        target_path = None
+        # Resolve the CONTAINER inside which the repository
+        # subfolder will be created. The container depends on the
+        # chat's owner:
+        #
+        #   - Project chat (internal) -> storage/projects/<pid>/workspace/
+        #   - Project chat (external) -> <project.workspace_path>/
+        #   - Standalone chat        -> storage/chats/<cid>/files/
+        #   - No chat_id             -> self._workspace_root
+        #
+        # `_resolve_workspace_base_dir` is the single source of
+        # truth for this decision; `get_workspace_by_chat` and
+        # `delete_workspace` route through the same helper, which
+        # is what guarantees that all three methods agree on where
+        # a given chat's repository lives.
+        target_path: Optional[Path] = None
+        repo_folder_name: str = ""
         if chat_id:
-            from pathlib import Path
-            # Resolve against the PROJECT root, not the backend package.
-            backend_root = Path(__file__).resolve().parent.parent.parent
-            project_root = backend_root.parent
-            target_path = project_root / "storage" / "chats" / chat_id / "files"
+            target_path = await self._resolve_workspace_base_dir(
+                chat_id
+            )
 
-            if not target_path.exists() and (backend_root / "storage" / "chats" / chat_id / "files").exists():
-                target_path = backend_root / "storage" / "chats" / chat_id / "files"
+            # Derive the subfolder name the workspace manager will
+            # create. The same derivation runs inside the manager
+            # (see `_derive_repository_folder_name` in
+            # `git/workspace.py`); duplicating it here is what lets
+            # the pre-check below test the exact path the manager
+            # will materialize.
+            for _attr in ("name", "repository_name"):
+                _val = getattr(repo, _attr, None)
+                if _val:
+                    repo_folder_name = str(_val)
+                    break
+            if not repo_folder_name:
+                _full = getattr(repo, "full_name", None) or ""
+                if "/" in _full:
+                    repo_folder_name = _full.rsplit("/", 1)[-1]
+            if not repo_folder_name:
+                repo_folder_name = (
+                    getattr(repo, "repository_id", "") or "repo"
+                )
 
-            # A chat can host at most ONE workspace. If the target
-            # already contains a .git directory, this is a
-            # re-request on an existing workspace, not a new one.
-            # Refuse early with a clear message instead of letting
-            # `git worktree add` fail with an opaque error.
-            if target_path.exists() and (target_path / ".git").exists():
+            # Pre-check: block only when THIS specific repository
+            # is already present in the container.
+            #
+            # The previous version blocked on any `.git` anywhere
+            # under `files/`, which was correct for the
+            # one-workspace-per-chat design but is now actively
+            # wrong: with the Project Workspace integration, a
+            # project's workspace directory is a CONTAINER for
+            # multiple repositories, and the second `create_workspace`
+            # call (for a different repo, in the same project)
+            # would be rejected even though the target subfolder is
+            # clean. Checking `<container>/<repo_folder>/.git`
+            # keeps the "don't create duplicate entries for the
+            # same repo" protection while allowing different repos
+            # to coexist inside one project workspace.
+            candidate_path = target_path / repo_folder_name
+            if (
+                candidate_path.exists()
+                and (candidate_path / ".git").exists()
+            ):
                 raise ValidationError(
-                    f"Chat '{chat_id}' already contains a workspace. "
-                    "Please use a fresh chat to create a new workspace, "
-                    "or reuse the existing one."
+                    f"The repository '{repo_folder_name}' already "
+                    f"has a workspace at '{candidate_path}'. Delete "
+                    f"the existing workspace first if you want to "
+                    f"re-create it, or select a different "
+                    f"repository.",
+                    details={
+                        "chat_id": chat_id,
+                        "repository_folder": repo_folder_name,
+                        "workspace_path": str(candidate_path),
+                    },
                 )
 
         # Pass `auth_token` so that private repositories can be
@@ -2863,6 +3415,12 @@ class SourceControlFacade:
         # before this call, which made every private-repo clone via
         # the UI fail with an authentication error from the provider
         # even though the token was already resolved above.
+        #
+        # `metadata={"chat_id": chat_id}` is threaded through to the
+        # workspace marker. It is what allows `get_workspace_by_chat`
+        # to disambiguate which workspace inside a shared project
+        # workspace belongs to a specific chat when the project has
+        # multiple repositories.
         ws_ref = await self.workspace_manager.create_workspace(
             repo=repo,
             base_sha=getattr(payload, "base_sha", None),
@@ -2870,6 +3428,7 @@ class SourceControlFacade:
             use_worktree=True,
             target_path=target_path,
             auth_token=token,
+            metadata=({"chat_id": chat_id} if chat_id else None),
         )
 
         self._audit(
@@ -2940,23 +3499,103 @@ class SourceControlFacade:
         from pathlib import Path
         import json as _json
 
-        backend_root = Path(__file__).resolve().parent.parent.parent
-        project_root = backend_root.parent
-        candidate_paths = [
-            project_root / "storage" / "chats" / chat_id / "files",
-            backend_root / "storage" / "chats" / chat_id / "files",
-        ]
-        # Primary expected path is the PROJECT root (matches how
-        # PELDRUN actually stores chat files). The backend root
-        # variant is a compatibility fallback for older layouts.
-        expected_path = next(
-            (p for p in candidate_paths if p.exists()),
-            candidate_paths[0],
-        )
+        # Resolve the CONTAINER inside which this chat's workspace
+        # lives. This is the same helper `create_workspace` uses,
+        # so the two methods can never disagree about the layout.
+        # Handles three cases:
+        #
+        #   - Project chat (internal) -> storage/projects/<pid>/workspace/
+        #   - Project chat (external) -> <project.workspace_path>/
+        #   - Standalone chat        -> storage/chats/<cid>/files/
+        #
+        # The previous implementation hardcoded the standalone-chat
+        # path and therefore could not find any workspace whose
+        # owning chat belonged to a project: after a server restart
+        # (which clears the in-memory registry) the chat was
+        # reported as empty even though its Git repository was
+        # sitting under `storage/projects/<pid>/workspace/<repo>/`.
+        try:
+            expected_path = await self._resolve_workspace_base_dir(
+                chat_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "get_workspace_by_chat: could not resolve base "
+                "dir for %r: %s",
+                chat_id,
+                type(exc).__name__,
+            )
+            return None
 
         # ---- Strategy 1: .peldrun/workspace.json on disk ----
-        marker_path = expected_path / ".peldrun" / "workspace.json"
-        if marker_path.exists():
+        #
+        # Two physical layouts are supported:
+        #
+        #   1. Legacy: `<container>/.peldrun/workspace.json` — the
+        #      repository was cloned directly into the container
+        #      (historical one-workspace-per-chat design).
+        #   2. Modern: `<container>/<repo>/.peldrun/workspace.json`
+        #      — the repository lives in a per-repository
+        #      subfolder. In a PROJECT workspace, the container is
+        #      the project's `workspace/` directory, so several
+        #      repositories can coexist side by side.
+        #
+        # DISAMBIGUATION RULES:
+        #
+        #   - When the container holds exactly ONE marker, that
+        #     marker wins unconditionally. This preserves backward
+        #     compatibility with workspaces created before the
+        #     `metadata.chat_id` field existed.
+        #   - When the container holds MULTIPLE markers, the one
+        #     whose `metadata.chat_id` matches the requested chat
+        #     wins. If NONE matches, the method refuses to guess
+        #     and returns None: guessing would silently attach
+        #     this chat to another chat's repository, which is
+        #     strictly worse than showing "no workspace".
+        candidate_markers: list[Path] = []
+        try:
+            legacy_marker = (
+                expected_path / ".peldrun" / "workspace.json"
+            )
+            if legacy_marker.exists():
+                candidate_markers.append(legacy_marker)
+            for child in expected_path.iterdir():
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                sub_marker = (
+                    child / ".peldrun" / "workspace.json"
+                )
+                if sub_marker.exists():
+                    candidate_markers.append(sub_marker)
+        except OSError:
+            pass
+
+        marker_path: Optional[Path] = None
+        if len(candidate_markers) == 1:
+            marker_path = candidate_markers[0]
+        elif len(candidate_markers) > 1:
+            for _candidate in candidate_markers:
+                try:
+                    _data = _json.loads(
+                        _candidate.read_text(encoding="utf-8")
+                    )
+                except (OSError, _json.JSONDecodeError):
+                    continue
+                if not isinstance(_data, dict):
+                    continue
+                _meta = _data.get("metadata") or {}
+                if (
+                    isinstance(_meta, dict)
+                    and _meta.get("chat_id") == chat_id
+                ):
+                    marker_path = _candidate
+                    break
+
+        if marker_path is not None:
+            # The directory that actually contains `.git` is the
+            # marker's grandparent: `<container>/<repo>/` for the
+            # modern layout, `<container>/` for the legacy one.
+            actual_workspace_path = marker_path.parent.parent
             try:
                 raw = marker_path.read_text(encoding="utf-8")
                 data = _json.loads(raw)
@@ -2970,22 +3609,22 @@ class SourceControlFacade:
                 # creates the push operation against the right
                 # branch and the policy engine does not refuse the
                 # request because it thinks we are on `main`.
+                #
+                # `git rev-parse` MUST run in the directory that
+                # actually contains `.git`. With the subfolder
+                # layout, that directory is `actual_workspace_path`
+                # (e.g. `files/peldrun/`), NOT `files/`. Running
+                # the command from `files/` would fail with a
+                # "not a git repository" error and the fallback
+                # value from the marker would be used instead.
                 actual_branch = str(data.get("current_branch") or "main")
                 try:
                     import asyncio as _asyncio
                     import subprocess as _subprocess
-                    # Offload the blocking subprocess call to a
-                    # worker thread so the async event loop stays
-                    # responsive. The previous synchronous
-                    # `subprocess.run(...)` call froze the entire
-                    # FastAPI event loop for the duration of the
-                    # Git invocation (up to `timeout` seconds),
-                    # stalling every other in-flight request
-                    # serviced by the same worker.
                     res = await _asyncio.to_thread(
                         _subprocess.run,
                         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=str(expected_path),
+                        cwd=str(actual_workspace_path),
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -2997,9 +3636,6 @@ class SourceControlFacade:
                     ):
                         actual_branch = res.stdout.strip()
                 except Exception:
-                    # Best-effort: if git is unavailable or the
-                    # directory is not a real repo, fall back to
-                    # the marker value.
                     pass
 
                 if ws_id:
@@ -3046,6 +3682,14 @@ class SourceControlFacade:
                 pass
 
         # ---- Strategy 2: in-memory workspace registry ----
+        #
+        # Mirrors Strategy 1's disambiguation rules: a workspace
+        # matches when its path equals the container (legacy) or
+        # is a direct child of it (modern). When more than one
+        # workspace matches, the one whose `metadata.chat_id`
+        # names this chat is preferred. When no matching workspace
+        # carries a `chat_id` and more than one match exists, the
+        # method refuses to guess.
         all_workspaces = []
         if hasattr(self.workspace_manager, "list_workspaces"):
             try:
@@ -3055,46 +3699,104 @@ class SourceControlFacade:
         elif hasattr(self.workspace_manager, "_workspaces"):
             all_workspaces = list(self.workspace_manager._workspaces.values())
 
+        try:
+            expected_resolved = expected_path.resolve()
+        except (OSError, ValueError):
+            expected_resolved = expected_path
+
+        path_matches: list[Any] = []
         for ws in all_workspaces:
             ws_path = getattr(ws, "workspace_path", "") or ""
             try:
-                if Path(ws_path).resolve() == expected_path.resolve():
-                    return WorkspaceResponse(
-                        workspace_id=ws.workspace_id,
-                        repository_id=ws.repository_id,
-                        current_branch=ws.current_branch,
-                        base_sha=ws.base_sha,
-                        head_sha=ws.head_sha,
-                        is_dirty=not ws.is_clean,
-                        created_at=ws.created_at,
-                    )
+                ws_resolved = Path(ws_path).resolve()
             except (OSError, ValueError):
                 continue
+            if (
+                ws_resolved == expected_resolved
+                or ws_resolved.parent == expected_resolved
+            ):
+                path_matches.append(ws)
+
+        selected_ws: Optional[Any] = None
+        if len(path_matches) == 1:
+            selected_ws = path_matches[0]
+        elif len(path_matches) > 1:
+            for ws in path_matches:
+                meta = getattr(ws, "metadata", None) or {}
+                if (
+                    isinstance(meta, dict)
+                    and meta.get("chat_id") == chat_id
+                ):
+                    selected_ws = ws
+                    break
+
+        if selected_ws is not None:
+            return WorkspaceResponse(
+                workspace_id=selected_ws.workspace_id,
+                repository_id=selected_ws.repository_id,
+                current_branch=selected_ws.current_branch,
+                base_sha=selected_ws.base_sha,
+                head_sha=selected_ws.head_sha,
+                is_dirty=not selected_ws.is_clean,
+                created_at=selected_ws.created_at,
+            )
 
         # ---- Strategy 3: durable operation journal ----
+        #
+        # Same disambiguation rules as Strategies 1 and 2. The
+        # journal rarely holds more than one workspace for a
+        # single chat, but the filter is uniform across all three
+        # strategies so a future call-site cannot accidentally
+        # observe a different result depending on which strategy
+        # matched first.
+        journal_matches: list[Any] = []
         try:
             operations = await self.operation_service.list_operations()
             for op in operations or ():
                 if not op.workspace_id:
                     continue
-                ws_ref = self.workspace_manager.get_workspace(op.workspace_id)
+                ws_ref = self.workspace_manager.get_workspace(
+                    op.workspace_id
+                )
                 if ws_ref is None:
                     continue
                 try:
-                    if Path(ws_ref.workspace_path).resolve() == expected_path.resolve():
-                        return WorkspaceResponse(
-                            workspace_id=ws_ref.workspace_id,
-                            repository_id=ws_ref.repository_id,
-                            current_branch=ws_ref.current_branch,
-                            base_sha=ws_ref.base_sha,
-                            head_sha=ws_ref.head_sha,
-                            is_dirty=not ws_ref.is_clean,
-                            created_at=ws_ref.created_at,
-                        )
+                    ws_resolved = Path(
+                        ws_ref.workspace_path
+                    ).resolve()
                 except (OSError, ValueError):
                     continue
+                if (
+                    ws_resolved == expected_resolved
+                    or ws_resolved.parent == expected_resolved
+                ):
+                    journal_matches.append(ws_ref)
         except Exception:
             pass
+
+        selected_journal_ws: Optional[Any] = None
+        if len(journal_matches) == 1:
+            selected_journal_ws = journal_matches[0]
+        elif len(journal_matches) > 1:
+            for ws in journal_matches:
+                meta = getattr(ws, "metadata", None) or {}
+                if (
+                    isinstance(meta, dict)
+                    and meta.get("chat_id") == chat_id
+                ):
+                    selected_journal_ws = ws
+                    break
+
+        if selected_journal_ws is not None:
+            return WorkspaceResponse(
+                workspace_id=selected_journal_ws.workspace_id,
+                repository_id=selected_journal_ws.repository_id,
+                current_branch=selected_journal_ws.current_branch,
+                base_sha=selected_journal_ws.base_sha,
+                head_sha=selected_journal_ws.head_sha,
+                is_dirty=not selected_journal_ws.is_clean,
+                created_at=selected_journal_ws.created_at,
+            )
 
         return None
 
@@ -3151,31 +3853,147 @@ class SourceControlFacade:
         # what allows delete to work after a process restart even
         # when the in-memory registry was lost.
         if not workspace_path:
-            backend_root = _Path(__file__).resolve().parent.parent.parent
+            # Fallback scan used when the workspace manager's own
+            # registry lookup failed. This happens after a process
+            # restart (in-memory registry cleared, on-disk marker
+            # cache lost) or in a multi-worker deployment where
+            # the workspace was created by another worker.
+            #
+            # All three concrete storage layouts the application
+            # can produce are scanned, in this order:
+            #
+            #   1. Standalone chat:        storage/chats/<cid>/files/
+            #   2. Project (internal):     storage/projects/<pid>/workspace/
+            #   3. Project (external):     <project.workspace_path>/
+            #
+            # Within each container, both physical marker layouts
+            # are tried: `<container>/.peldrun/workspace.json`
+            # (legacy one-workspace-per-chat) and
+            # `<container>/<repo>/.peldrun/workspace.json` (modern
+            # per-repository subfolder). The manager's own helper
+            # is intentionally NOT used here because it needs a
+            # live registry, which is exactly what is missing at
+            # this point.
+            import json as _json
+
+            scan_containers: list[_Path] = []
+
+            # Container set #1: standalone chat directories.
+            try:
+                from omweb.project_manager import project_manager
+                chats_dir = project_manager.chats_dir
+                if chats_dir.exists():
+                    for chat_dir in chats_dir.iterdir():
+                        if chat_dir.is_dir():
+                            scan_containers.append(chat_dir / "files")
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Container set #2: project workspaces (internal AND
+            # external). Internal projects use the canonical
+            # `storage/projects/<pid>/workspace/` path; external
+            # projects use their configured absolute
+            # `workspace_path`. Both are enumerated from the
+            # project index so a project whose workspace lives
+            # outside `storage/` is still discovered.
+            try:
+                from omweb.project_manager import project_manager
+                for _project in project_manager.list_projects():
+                    if not isinstance(_project, dict):
+                        continue
+                    _ws_type = str(
+                        _project.get("workspace_type") or "internal"
+                    ).strip().lower()
+                    if _ws_type == "external":
+                        _raw = _project.get("workspace_path")
+                        if isinstance(_raw, str) and _raw.strip():
+                            try:
+                                scan_containers.append(
+                                    _Path(_raw).expanduser().resolve()
+                                )
+                            except (OSError, RuntimeError):
+                                continue
+                    else:
+                        _pid = _project.get("id")
+                        if isinstance(_pid, str) and _pid:
+                            scan_containers.append(
+                                project_manager.storage_dir
+                                / "projects"
+                                / _pid
+                                / "workspace"
+                            )
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Container set #3: legacy backend-relative layout
+            # (deployments that predate the project_manager
+            # rewrite).
+            backend_root = _Path(
+                __file__
+            ).resolve().parent.parent.parent
             project_root = backend_root.parent
-            for base in (
+            for _legacy_base in (
                 project_root / "storage" / "chats",
                 backend_root / "storage" / "chats",
             ):
-                if not base.exists():
+                if _legacy_base.exists():
+                    for chat_dir in _legacy_base.iterdir():
+                        if chat_dir.is_dir():
+                            scan_containers.append(chat_dir / "files")
+
+            # Deduplicate containers to avoid rescanning the same
+            # directory when a deployment mixes storage layouts.
+            seen_containers: set[str] = set()
+            unique_containers: list[_Path] = []
+            for _c in scan_containers:
+                try:
+                    _key = str(_c.resolve())
+                except (OSError, ValueError):
+                    _key = str(_c)
+                if _key in seen_containers:
                     continue
-                for chat_dir in base.iterdir():
-                    if not chat_dir.is_dir():
-                        continue
-                    files_dir = chat_dir / "files"
-                    marker = files_dir / ".peldrun" / "workspace.json"
+                seen_containers.add(_key)
+                unique_containers.append(_c)
+
+            # For each container, test the legacy marker and every
+            # immediate subfolder marker. Both are bounded reads;
+            # a workspace is only accepted when its `workspace_id`
+            # matches the one being deleted, so unrelated markers
+            # (other chats, other repositories) are ignored.
+            for container in unique_containers:
+                if not container.exists():
+                    continue
+
+                candidate_dirs: list[_Path] = [container]
+                try:
+                    for child in container.iterdir():
+                        if (
+                            child.is_dir()
+                            and not child.name.startswith(".")
+                        ):
+                            candidate_dirs.append(child)
+                except OSError:
+                    continue
+
+                for candidate in candidate_dirs:
+                    marker = (
+                        candidate / ".peldrun" / "workspace.json"
+                    )
                     if not marker.exists():
                         continue
                     try:
-                        import json as _json
                         data = _json.loads(
                             marker.read_text(encoding="utf-8")
                         )
-                        if data.get("workspace_id") == workspace_id:
-                            workspace_path = str(files_dir)
-                            break
-                    except Exception:
+                    except (OSError, _json.JSONDecodeError):
                         continue
+                    if (
+                        isinstance(data, dict)
+                        and data.get("workspace_id") == workspace_id
+                    ):
+                        workspace_path = str(candidate)
+                        break
+
                 if workspace_path:
                     break
 

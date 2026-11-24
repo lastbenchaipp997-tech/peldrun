@@ -1604,6 +1604,86 @@ async def get_workspace_by_chat(
     except Exception as exc:
         handle_source_control_error(exc)
 
+
+@router.get(
+    "/workspaces/by-chat/{chat_id}/all",
+    response_model=Sequence[WorkspaceResponse],
+)
+async def list_workspaces_by_chat(
+    chat_id: str,
+    facade: SourceControlFacade = Depends(get_source_control_facade),
+) -> Sequence[WorkspaceResponse]:
+    """Return EVERY workspace visible to a chat, newest first.
+
+    Distinct from `GET /workspaces/by-chat/{chat_id}`, which
+    returns a single workspace (the one bound to the chat's
+    container). This endpoint returns ALL repositories that live
+    inside the container, so a project with several repositories
+    can show them side by side to the user.
+
+    Semantics:
+        - For a chat inside a project, the container is the
+          project's `workspace/` directory, and the response
+          contains every repository the project hosts (not just
+          the one the chat itself created).
+        - For a standalone chat, the container is the chat's own
+          `files/` directory, and the response contains the
+          repositories that directory holds (typically one).
+
+    The list is sorted by `created_at` ascending so the first
+    repository a project ever received appears at the top. An
+    empty list means "no workspace yet": the caller should show
+    the create-workspace flow.
+
+    Route ordering: this route is declared BEFORE the generic
+    `GET /workspaces/{workspace_id}`. FastAPI matches routes in
+    declaration order, and the `by-chat/{chat_id}/all` path has
+    more literal segments than `{workspace_id}`, so FastAPI
+    would also match it correctly even if declared later. Placing
+    it here keeps all the `by-chat/*` routes together and makes
+    the ordering intent explicit for future maintainers.
+    """
+    try:
+        return await facade.list_workspaces_by_chat(chat_id)
+    except Exception as exc:
+        handle_source_control_error(exc)
+
+
+@router.get(
+    "/workspaces/by-project/{project_id}",
+    response_model=Sequence[WorkspaceResponse],
+)
+async def list_workspaces_by_project(
+    project_id: str,
+    facade: SourceControlFacade = Depends(get_source_control_facade),
+) -> Sequence[WorkspaceResponse]:
+    """Return every workspace hosted by a project, newest first.
+
+    This endpoint addresses the project directly, so it works
+    without a chat context. It is what the standalone
+    `SourceControlWorkspacePanel` uses when it is opened from a
+    project dashboard (or from any UI that knows the project but
+    not the chat).
+
+    The response is identical in shape to
+    `GET /workspaces/by-chat/{chat_id}/all`, but the container is
+    resolved from the project's own metadata:
+
+        - Internal project -> `storage/projects/<pid>/workspace/`
+        - External project -> `<project.workspace_path>/`
+
+    Returns an empty list for an unknown project, a project whose
+    workspace directory does not yet exist, or a project whose
+    external path was removed after the project was created. The
+    caller SHOULD treat "empty" as "no workspace yet" and offer
+    the create-workspace flow.
+    """
+    try:
+        return await facade.list_workspaces_by_project(project_id)
+    except Exception as exc:
+        handle_source_control_error(exc)
+
+
 @router.post("/workspaces/{workspace_id}/ensure-editable-branch")
 async def ensure_editable_branch(
     workspace_id: str,

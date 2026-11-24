@@ -1,7 +1,11 @@
 // frontend/src/features/source-control/state/source-control-store.ts
 
 import { create } from "zustand";
-import { OperationResponse, DiffSummaryResponse } from "../api/schemas";
+import {
+  OperationResponse,
+  DiffSummaryResponse,
+  WorkspaceResponse,
+} from "../api/schemas";
 import {
   WorkbenchPanelTab,
   SourceControlViewMode,
@@ -60,6 +64,83 @@ interface SourceControlStoreState {
 
   /** Clears all active operation context and resets to idle state */
   resetOperationContext: () => void;
+
+  // --- Workspace Selection ---
+  //
+  // After the Project Workspace integration, a single chat can
+  // see SEVERAL repositories (all the repos the project hosts).
+  // The user picks ONE of them for the operations that target a
+  // single repository: diff, commit, push, and the Browse view.
+  //
+  // The store does NOT fetch; components (or a dedicated
+  // `useWorkspaces` hook) call `sourceControlClient.list*` and
+  // push the results in via `setAvailableWorkspaces`. This is the
+  // same "dumb store" pattern the rest of this file follows.
+
+  /**
+   * Every workspace visible to the current chat (or project).
+   *
+   * Empty when no fetch has run yet, or when the chat has no
+   * workspace. Consumers MUST distinguish the two via
+   * `isLoadingWorkspaces` / `workspacesError`.
+   */
+  availableWorkspaces: WorkspaceResponse[];
+
+  /**
+   * The workspace the user selected for single-repo operations.
+   *
+   * Fallback priority for consumers (in order):
+   *   1. `activeWorkspaceId` (this field), when set.
+   *   2. `activeOperation?.workspace_id`, when an operation is
+   *      being reviewed in Agent Mode.
+   *   3. The first entry in `availableWorkspaces`, when there is
+   *      exactly one workspace.
+   *
+   * `BrowsePanel` and any new workspace-aware component SHOULD
+   * use this fallback chain so that switching between Agent Mode
+   * and Browse Mode stays coherent.
+   */
+  activeWorkspaceId: string | null;
+
+  /** True while a workspace list fetch is in flight. */
+  isLoadingWorkspaces: boolean;
+
+  /** Error message from the most recent workspace list fetch. */
+  workspacesError: string | null;
+
+  /**
+   * Replace the available-workspaces list.
+   *
+   * If `activeWorkspaceId` is no longer present in the new list
+   * (because the workspace was deleted, or because the chat
+   * changed), the selection is automatically snapped to the first
+   * entry (or cleared to `null` when the list is empty). This
+   * invariant keeps the two fields consistent without forcing
+   * every caller to remember to clean up.
+   *
+   * The fetch error is cleared on every successful update: a new
+   * non-empty list means the last error is obsolete.
+   */
+  setAvailableWorkspaces: (workspaces: WorkspaceResponse[]) => void;
+
+  /** Explicitly select (or clear with `null`) the active workspace. */
+  setActiveWorkspace: (workspaceId: string | null) => void;
+
+  /** Toggle the loading flag. Called at the start/end of a fetch. */
+  setLoadingWorkspaces: (loading: boolean) => void;
+
+  /** Record or clear the most recent workspace fetch error. */
+  setWorkspacesError: (error: string | null) => void;
+
+  /**
+   * Forget the workspace list and the current selection.
+   *
+   * Called when the user switches chats (or closes the panel) so
+   * that the next mount does not briefly render the previous
+   * chat's repositories. This is a state-only operation: the
+   * fetch is performed separately by the caller.
+   */
+  clearWorkspaces: () => void;
 }
 
 /**
@@ -113,5 +194,56 @@ export const useSourceControlStore = create<SourceControlStoreState>((set) => ({
       activeOperation: null,
       activeDiff: null,
       error: null,
+    }),
+
+  // --- Workspace Selection ---
+  availableWorkspaces: [],
+  activeWorkspaceId: null,
+  isLoadingWorkspaces: false,
+  workspacesError: null,
+
+  setAvailableWorkspaces: (workspaces) =>
+    set((state) => {
+      // Preserve the user's selection when the workspace is
+      // still present. Otherwise snap to the first entry, or
+      // clear when the list is empty. This guarantees
+      // `activeWorkspaceId` is either null or points at a real
+      // workspace in `availableWorkspaces` — no component ever
+      // needs to defend against a dangling id.
+      const stillPresent =
+        state.activeWorkspaceId !== null &&
+        workspaces.some(
+          (w) => w.workspace_id === state.activeWorkspaceId
+        );
+      const nextActive = stillPresent
+        ? state.activeWorkspaceId
+        : workspaces.length > 0
+          ? workspaces[0].workspace_id
+          : null;
+
+      return {
+        availableWorkspaces: workspaces,
+        activeWorkspaceId: nextActive,
+        // A successful fetch is authoritative: clear any
+        // previous error.
+        workspacesError: null,
+      };
+    }),
+
+  setActiveWorkspace: (workspaceId) =>
+    set({ activeWorkspaceId: workspaceId }),
+
+  setLoadingWorkspaces: (loading) =>
+    set({ isLoadingWorkspaces: loading }),
+
+  setWorkspacesError: (error) =>
+    set({ workspacesError: error }),
+
+  clearWorkspaces: () =>
+    set({
+      availableWorkspaces: [],
+      activeWorkspaceId: null,
+      isLoadingWorkspaces: false,
+      workspacesError: null,
     }),
 }));

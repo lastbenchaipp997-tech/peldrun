@@ -96,32 +96,51 @@ export function SourceControlPanel({
     if (!manual.isActive || manual.chatId !== resolvedChatId) {
       manual.activate(resolvedChatId);
 
-      // Check if a workspace already exists for this chat.
-      // If so, skip step 1 & 2 and jump straight to editing.
+      // Resolve the list of workspaces visible to this chat.
+      // Three outcomes drive the next step:
+      //
+      //   - 0 workspaces → stay on "select-repo"; the
+      //     `RepoSelectionStep` component in `ManualModePanel`
+      //     detects the empty list and forces the clone flow.
+      //
+      //   - 1 workspace → auto-select it and jump straight to
+      //     "editing". This preserves the historical single-
+      //     workspace behaviour: a fresh chat that inherits a
+      //     project with one repo goes straight to work.
+      //
+      //   - 2+ workspaces → stay on "select-repo"; the picker
+      //     renders the list and lets the user choose. The
+      //     "select-repo" step no longer means "clone"; it now
+      //     means "pick from existing, or clone new".
       void (async () => {
-        // Strategy 1: ask backend for the workspace bound to this chat.
         try {
-          const ws = await sourceControlClient.getWorkspaceByChat(resolvedChatId);
-          if (ws) {
-            useManualModeStore.getState().setWorkspace(ws);
-            return;
-          }
-        } catch (err) {
-          console.warn("[Manual Mode] getWorkspaceByChat failed:", err);
-        }
+          const workspaces =
+            await sourceControlClient.listWorkspacesByChat(
+              resolvedChatId
+            );
+          useSourceControlStore
+            .getState()
+            .setAvailableWorkspaces(workspaces);
 
-        // Strategy 2: use the active operation's workspace (if any).
-        // When the user clicked "Open Review & Approve" in the chat,
-        // the active operation already has a workspace_id.
-        const sc = useSourceControlStore.getState();
-        const activeWsId = sc.activeOperation?.workspace_id;
-        if (activeWsId) {
-          try {
-            const ws = await sourceControlClient.getWorkspace(activeWsId);
+          if (workspaces.length === 1) {
+            // Single workspace: auto-select, exactly like the
+            // old `getWorkspaceByChat` flow did.
+            const ws = workspaces[0];
+            useSourceControlStore
+              .getState()
+              .setActiveWorkspace(ws.workspace_id);
             useManualModeStore.getState().setWorkspace(ws);
-          } catch (err) {
-            console.warn("[Manual Mode] getWorkspace (active op) failed:", err);
           }
+          // For 0 or 2+ workspaces, `RepoSelectionStep` renders
+          // the appropriate UI on the "select-repo" step that
+          // `activate()` already set.
+        } catch (err) {
+          console.warn(
+            "[Manual Mode] listWorkspacesByChat failed:",
+            err
+          );
+          // Fall through: `RepoSelectionStep` will show its own
+          // error state when its selector fails to load.
         }
       })();
     }
@@ -246,6 +265,18 @@ function BrowsePanel({ chatId }: { chatId: string | null }) {
   const activeOperation = useSourceControlStore(
     (s) => s.activeOperation
   );
+  // Subscribe to the store's workspace selection so the panel
+  // reacts to a switch made through either:
+  //   - the compact selector in `GitBrowserPanel`'s header, or
+  //   - a Manual Mode workspace pick (which writes the same store
+  //     field), or
+  //   - any future caller that invokes `setActiveWorkspace`.
+  const activeWorkspaceId = useSourceControlStore(
+    (s) => s.activeWorkspaceId
+  );
+  const availableWorkspaces = useSourceControlStore(
+    (s) => s.availableWorkspaces
+  );
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -255,13 +286,50 @@ function BrowsePanel({ chatId }: { chatId: string | null }) {
       if (cancelled) return;
       setState({ status: "loading" });
 
-      // Strategy 1: an active operation, if it has a workspace.
+      // Strategy 0: an explicit selection from the store. This is
+      // the highest-priority signal because it reflects a user
+      // action ("I want THIS repository"), while the other
+      // strategies reflect automatic resolution.
+      if (activeWorkspaceId) {
+        const selected = availableWorkspaces.find(
+          (w) => w.workspace_id === activeWorkspaceId
+        );
+        if (selected) {
+          setState({
+            status: "ready",
+            workspaceId: selected.workspace_id,
+            repositoryId: selected.repository_id,
+            provider: "github",
+            currentBranch: selected.current_branch || "main",
+          });
+          return;
+        }
+      }
+
+      // Strategy 1: the active operation's workspace. Fires when
+      // the user clicked "Open Review & Approve" from Agent Mode.
       if (activeOperation?.workspace_id) {
+        // The operation's workspace might already be in the
+        // available list; if so, reuse it and avoid a network
+        // round-trip.
+        const inList = availableWorkspaces.find(
+          (w) => w.workspace_id === activeOperation.workspace_id
+        );
+        if (inList) {
+          useSourceControlStore
+            .getState()
+            .setActiveWorkspace(inList.workspace_id);
+          return; // The store update triggers a re-render and a
+          // second pass through this effect that hits Strategy 0.
+        }
         try {
           const ws = await sourceControlClient.getWorkspace(
             activeOperation.workspace_id
           );
           if (cancelled) return;
+          useSourceControlStore
+            .getState()
+            .setActiveWorkspace(ws.workspace_id);
           setState({
             status: "ready",
             workspaceId: ws.workspace_id,
@@ -279,39 +347,57 @@ function BrowsePanel({ chatId }: { chatId: string | null }) {
             "[BrowsePanel] getWorkspace failed; falling back to chat lookup:",
             err
           );
-          // Fall through to the chat-scoped strategy.
         }
       }
 
-      // Strategy 2: chat-scoped workspace (Manual Mode, or a
-      // workspace created by an earlier agent run on this chat).
+      // Strategy 2: first available workspace from the store. If
+      // the list is already populated (for example, by Manual Mode
+      // or by a prior fetch), use the first entry so the user sees
+      // content instead of an empty state.
+      if (availableWorkspaces.length > 0) {
+        const first = availableWorkspaces[0];
+        useSourceControlStore
+          .getState()
+          .setActiveWorkspace(first.workspace_id);
+        // The store update triggers a re-render and the effect
+        // runs again; Strategy 0 picks up the selection.
+        return;
+      }
+
+      // Strategy 3: fetch the list from the chat and use its
+      // first entry. This is the cold-start path (first mount in
+      // a fresh session) where nothing is cached yet.
       if (chatId) {
         try {
-          const ws = await sourceControlClient.getWorkspaceByChat(
-            chatId
-          );
+          const workspaces =
+            await sourceControlClient.listWorkspacesByChat(chatId);
           if (cancelled) return;
-          if (ws?.workspace_id && ws?.repository_id) {
+          useSourceControlStore
+            .getState()
+            .setAvailableWorkspaces(workspaces);
+          if (workspaces.length > 0) {
+            const first = workspaces[0];
+            useSourceControlStore
+              .getState()
+              .setActiveWorkspace(first.workspace_id);
             setState({
               status: "ready",
-              workspaceId: ws.workspace_id,
-              repositoryId: ws.repository_id,
+              workspaceId: first.workspace_id,
+              repositoryId: first.repository_id,
               provider: "github",
-              currentBranch: ws.current_branch || "main",
+              currentBranch: first.current_branch || "main",
             });
             return;
           }
         } catch (err) {
           console.warn(
-            "[BrowsePanel] getWorkspaceByChat failed:",
+            "[BrowsePanel] listWorkspacesByChat failed:",
             err
           );
         }
       }
 
       if (cancelled) return;
-
-      // No workspace anywhere: give the user a clear next step.
       setState({
         status: "empty",
         reason: chatId ? "no-workspace" : "no-chat",
@@ -322,7 +408,13 @@ function BrowsePanel({ chatId }: { chatId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [chatId, activeOperation?.operation_id, reloadKey]);
+  }, [
+    chatId,
+    activeOperation?.operation_id,
+    activeWorkspaceId,
+    availableWorkspaces,
+    reloadKey,
+  ]);
 
   if (state.status === "loading") {
     return (
@@ -361,12 +453,32 @@ function BrowsePanel({ chatId }: { chatId: string | null }) {
     );
   }
 
+  // Show the compact in-header selector only when there are at
+  // least two workspaces to choose from. A single-workspace chat
+  // does not need a selector (there is nothing to pick), and the
+  // empty case is already handled above.
+  const showSelector = availableWorkspaces.length > 1;
+
   return (
     <GitBrowserPanel
       workspaceId={state.workspaceId}
       repositoryId={state.repositoryId}
       provider={state.provider}
       currentBranch={state.currentBranch}
+      chatId={chatId}
+      showWorkspaceSelector={showSelector}
+      onWorkspaceSwitch={(ws) => {
+        // The selector already wrote `activeWorkspaceId` to the
+        // store; the effect above re-runs and re-renders with the
+        // new workspace. We only bump `reloadKey` here as an
+        // escape hatch for the rare case where the workspace id
+        // did not change (same-id switch) but the user still
+        // wants fresh data.
+        useSourceControlStore
+          .getState()
+          .setActiveWorkspace(ws.workspace_id);
+        setReloadKey((k) => k + 1);
+      }}
     />
   );
 }
