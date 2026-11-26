@@ -1,6 +1,6 @@
 ﻿//frontend\src\app\layout.tsx
 import type { Metadata, Viewport } from "next";
-import { Inter, DM_Sans, Libre_Baskerville, Cairo, JetBrains_Mono } from "next/font/google";
+import { Inter, DM_Sans, Libre_Baskerville, JetBrains_Mono,  Cairo, Tajawal } from "next/font/google";
 import { getServerStorageSnapshot } from "@/lib/storage/server";
 import { StorageProvider } from "@/components/providers/storage-provider";
 import { ThemeProvider } from "@/components/layout/theme-provider";
@@ -41,6 +41,14 @@ const cairo = Cairo({
   display: "swap",
 });
 
+const tajawal = Tajawal({
+  subsets: ["arabic", "latin"],
+  weight: ["200","300", "400","500", "700","800","900"],
+  variable: "--font-arabic",
+  display: "swap",
+});
+
+
 export const metadata: Metadata = {
   title: "peldrunWeb - Open Autonomous Agent",
   description: "Next-generation Web Interface for Autonomous AI Agents",
@@ -74,7 +82,7 @@ export default async function RootLayout({
       dir={isRtl ? "rtl" : "ltr"}
       data-theme={theme}
       suppressHydrationWarning
-      className={`${isDark ? "dark" : ""} ${dmSans.variable} ${libreBaskerville.variable}${cairo.variable}${mono.variable}`}
+      className={`${isDark ? "dark" : ""} ${dmSans.variable} ${libreBaskerville.variable}${cairo.variable}${tajawal.variable}${mono.variable}`}
     >
       <head>
         {/*

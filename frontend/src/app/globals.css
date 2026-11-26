@@ -72,6 +72,7 @@
     --font-sans: 'Inter', sans-serif;
     --font-serif: 'Libre Baskerville', serif;
     --font-arabic: 'Cairo', sans-serif;
+    --font-tajawal: 'tajawal',sans-serif;
     --font-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
 
@@ -149,8 +150,8 @@ span[aria-hidden="true"] > svg {
 
 
 [dir="rtl"] {
-  font-family: var(--font-arabic), var(--font-sans), system-ui, sans-serif;
-  --font-sans: 'Cairo', sans-serif;
+  font-family: var(--font-tajawal), var(--font-sans), system-ui, sans-serif;
+  --font-sans: 'tajawal', sans-serif;
   --font-serif: 'Cairo', serif;
   --font-arabic: 'Cairo', sans-serif;
 }
