@@ -1,0 +1,29 @@
+{
+  "name": "peldrun-desktop",
+  "productName": "PELDRUN",
+  "version": "1.0.0",
+  "description": "PELDRUN desktop shell (Electron + Python backend + Next.js standalone frontend)",
+  "author": "PELDRUN <dev@peldrun.local>",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "src/main.js",
+  "repository": { "type": "git", "url": "https://github.com/peldrun/peldrun.git" },
+  "scripts": {
+    "lock": "node scripts/lock-env.mjs",
+    "prepare:env": "node scripts/prepare-env.mjs",
+    "prepare:code": "node scripts/prepare-code.mjs",
+    "prepare:frontend": "node scripts/prepare-frontend.mjs",
+    "prepare:all": "npm run prepare:env && npm run prepare:code && npm run prepare:frontend",
+    "dev": "electron .",
+    "pack": "electron-builder --config electron-builder.config.cjs --dir",
+    "dist": "electron-builder --config electron-builder.config.cjs --publish never",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "electron": "45.5.0",
+    "electron-builder": "26.18.0"
+  }
+}

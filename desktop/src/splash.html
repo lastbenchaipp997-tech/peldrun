@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>PELDRUN</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; align-items: center; justify-content: center; flex-direction: column;
+         font: 15px system-ui, -apple-system, "Segoe UI", sans-serif; background: Canvas; color: CanvasText; }
+  .spinner { width: 28px; height: 28px; border: 3px solid rgba(128,128,128,.35); border-top-color: currentColor;
+             border-radius: 50%; animation: spin .9s linear infinite; margin-bottom: 18px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #track { width: 260px; height: 6px; border-radius: 3px; background: rgba(128,128,128,.25);
+           margin-top: 14px; overflow: hidden; visibility: hidden; }
+  #bar { height: 100%; width: 0; background: currentColor; transition: width .2s linear; }
+  small { opacity: .6; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <div id="msg">Starting PELDRUN…</div>
+  <div id="track"><div id="bar"></div></div>
+  <small>The first launch can take a little longer</small>
+</body>
+</html>

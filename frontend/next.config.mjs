@@ -16,6 +16,11 @@
  * Example:
  *   PELDRUN_BACKEND_URL=http://peldrun-backend:8088 npm run build
  */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8088";
 
 const rawBackendUrl =
@@ -29,6 +34,13 @@ const BACKEND_URL = rawBackendUrl.replace(/\/+$/, "");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Desktop (Electron) and Docker builds set PELDRUN_STANDALONE=1 to get a
+  // self-contained server in .next/standalone. Regular `next dev` / `next start`
+  // are unaffected. The tracing root is pinned so server.js always lands at
+  // .next/standalone/server.js, even if a parent directory has a lockfile.
+  ...(process.env.PELDRUN_STANDALONE === "1"
+    ? { output: "standalone", outputFileTracingRoot: __dirname }
+    : {}),
   reactStrictMode: false,
   experimental: {
     workerThreads: false,

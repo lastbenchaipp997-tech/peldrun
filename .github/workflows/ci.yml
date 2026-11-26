@@ -1,0 +1,103 @@
+name: CI
+
+# Catches cross-platform breakage early (e.g. a Windows-only import in the backend)
+# and checks that the desktop/Docker packaging inputs are still valid.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-smoke:
+    name: Backend starts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend requirements
+        run: pip install -r backend/requirements.txt
+      - name: Start the backend and check /api/health
+        run: python desktop/scripts/backend-smoke.py
+
+  frontend-build:
+    name: Frontend production build (standalone)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - name: next build (needs internet for next/font/google)
+        working-directory: frontend
+        env:
+          PELDRUN_STANDALONE: "1"
+          PELDRUN_BACKEND_URL: http://127.0.0.1:18088
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm run build
+          test -f .next/standalone/server.js
+
+  lock-check:
+    name: Desktop lock files match backend/requirements.txt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: pip install uv
+      - name: Regenerate locks (existing pins are kept as preferences)
+        run: node desktop/scripts/lock-env.mjs
+      - name: Fail if the committed locks are out of date
+        run: git diff --exit-code -- desktop/locks
+
+  docker-build:
+    name: Docker images build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - name: Backend image (without Chromium, to keep CI fast)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          build-args: INSTALL_BROWSERS=0
+          push: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+      - name: Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: false
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

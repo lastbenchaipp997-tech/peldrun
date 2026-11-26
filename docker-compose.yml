@@ -1,0 +1,46 @@
+# PELDRUN with Docker:   docker compose up --build        then open http://127.0.0.1:3088
+#
+# SECURITY: the backend has no authentication and CORS is open. Only the frontend is
+# published, and only on the loopback interface. Do not change "127.0.0.1" to
+# "0.0.0.0" unless you put your own authentication (reverse proxy, VPN) in front.
+name: peldrun
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      args:
+        INSTALL_BROWSERS: "1"
+    init: true
+    restart: unless-stopped
+    shm_size: "1gb"                 # Chromium needs more than the 64 MB default
+    environment:
+      PELDRUN_STORAGE_ROOT: /data/storage
+    volumes:
+      - peldrun-storage:/data/storage   # chats, memory, databases
+      - peldrun-config:/app/config      # settings (seeded from the image on first start)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8088/api/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        PELDRUN_BACKEND_URL: http://backend:8088
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PELDRUN_PORT:-3088}:3088"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  peldrun-storage:
+  peldrun-config:

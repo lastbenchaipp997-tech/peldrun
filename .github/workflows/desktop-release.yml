@@ -1,0 +1,243 @@
+name: Desktop release
+
+# Push a tag like v1.2.0  ->  builds installers for Windows, macOS (arm64 + Intel) and
+# Linux (x64 + arm64), smoke-tests every packaged app, and uploads everything to a DRAFT
+# GitHub Release. Nothing is visible to users until you press "Publish release".
+#
+# Manual run (Actions tab -> Run workflow): builds with the given version; installers are kept
+# as workflow artifacts unless "publish" is ticked.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build when not running from a tag (e.g. 1.2.3)"
+        type: string
+        default: "0.0.0-dev"
+      publish:
+        description: "Upload to a draft GitHub Release (otherwise only keep workflow artifacts)"
+        type: boolean
+        default: false
+      build_full:
+        description: "Also build the offline (full) installers, which embed Python + Chromium"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Resolve version and create the draft release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      publish: ${{ steps.v.outputs.publish }}
+      build_full: ${{ steps.v.outputs.build_full }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: v
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_FULL: ${{ inputs.build_full }}
+          VAR_FULL: ${{ vars.PELDRUN_BUILD_FULL }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"; PUBLISH=true
+          else
+            VERSION="${INPUT_VERSION:-0.0.0-dev}"; PUBLISH="${INPUT_PUBLISH:-false}"
+          fi
+          FULL=false
+          if [[ "$INPUT_FULL" == "true" || "$VAR_FULL" == "true" ]]; then FULL=true; fi
+          {
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "publish=$PUBLISH"
+            echo "build_full=$FULL"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create the draft release (once, so parallel jobs do not race)
+        if: steps.v.outputs.publish == 'true'
+        shell: bash
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --draft --title "PELDRUN ${{ steps.v.outputs.version }}" --generate-notes --target "$GITHUB_SHA"
+
+  build:
+    name: Build ${{ matrix.key }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     key: linux-x64 }
+          - { os: ubuntu-24.04-arm, key: linux-arm64 }
+          - { os: macos-15,         key: darwin-arm64 }
+          - { os: macos-15-intel,   key: darwin-x64 }
+          - { os: windows-2025,     key: win32-x64 }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      PUBLISH: ${{ needs.prepare.outputs.publish }}
+      BUILD_FULL: ${{ needs.prepare.outputs.build_full }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      # Where the app downloads its Python runtime from (the id is filled in by prepare-env).
+      PELDRUN_ENV_URL_TEMPLATE: https://github.com/${{ github.repository }}/releases/download/env-{id}/{file}
+      # Code signing (all optional; unsigned builds when the secrets are missing)
+      CSC_LINK: ${{ startsWith(matrix.key, 'darwin') && secrets.MAC_CSC_LINK || (startsWith(matrix.key, 'win32') && secrets.WIN_CSC_LINK || '') }}
+      CSC_KEY_PASSWORD: ${{ startsWith(matrix.key, 'darwin') && secrets.MAC_CSC_KEY_PASSWORD || (startsWith(matrix.key, 'win32') && secrets.WIN_CSC_KEY_PASSWORD || '') }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
+
+      - name: Linux packages for the smoke test
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Install desktop dependencies and set the version
+        working-directory: desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build the runtime layer (pinned Python + locked packages + Chromium)
+        working-directory: desktop
+        run: node scripts/prepare-env.mjs
+
+      - name: Stage the code layer
+        working-directory: desktop
+        run: node scripts/prepare-code.mjs
+
+      - name: Build the frontend (needs internet for next/font/google)
+        working-directory: desktop
+        run: node scripts/prepare-frontend.mjs
+
+      - name: Publish the runtime archive (skipped when it already exists for this env id)
+        if: env.PUBLISH == 'true'
+        run: |
+          ID=$(node -p "require('./desktop/build/env.json').id")
+          ENV_TAG="env-$ID"
+          gh release view "$ENV_TAG" >/dev/null 2>&1 || \
+            gh release create "$ENV_TAG" --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Runtime $ID" --notes "Python runtime layer $ID, built by CI. Not an application release." || true
+          gh release upload "$ENV_TAG" desktop/build/env-archive/* --clobber
+
+      - name: Package the installers (lite flavor)
+        working-directory: desktop
+        run: npx electron-builder --config electron-builder.config.cjs --publish never
+
+      - name: Smoke-test the packaged app
+        working-directory: desktop
+        env:
+          PELDRUN_SMOKE_NO_SANDBOX: ${{ runner.os == 'Linux' && '1' || '0' }}
+        run: |
+          export PELDRUN_ENV_ARCHIVE="$(ls "$PWD"/build/env-archive/*.tar.gz)"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then xvfb-run -a node scripts/smoke.mjs; else node scripts/smoke.mjs; fi
+
+      - name: Keep the installers as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.key }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap
+            desktop/dist/*.yml
+            !desktop/dist/builder-*.yml
+
+      - name: Upload the installers to the draft release
+        if: env.PUBLISH == 'true'
+        run: |
+          find desktop/dist -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.blockmap' -o -name '*.yml' \) \
+            ! -name 'builder-*' -print0 | xargs -0 gh release upload "$TAG" --clobber
+
+      - name: Offline installers (full flavor, optional)
+        if: env.BUILD_FULL == 'true'
+        working-directory: desktop
+        env:
+          PELDRUN_FLAVOR: full
+          PELDRUN_SMOKE_NO_SANDBOX: ${{ runner.os == 'Linux' && '1' || '0' }}
+        run: |
+          npx electron-builder --config electron-builder.config.cjs --publish never
+          if [[ "$RUNNER_OS" == "Linux" ]]; then xvfb-run -a node scripts/smoke.mjs dist-full; else node scripts/smoke.mjs dist-full; fi
+          if [[ "$PUBLISH" == "true" ]]; then
+            find dist-full -maxdepth 1 -type f \
+              \( -name '*-full.AppImage' -o -name '*-full.deb' -o -name '*-full.dmg' -o -name '*-full.zip' -o -name '*-full.exe' \) -print0 \
+              | xargs -0 gh release upload "$TAG" --clobber
+          fi
+
+  docker:
+    name: Publish Docker images
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          push: true
+          platforms: linux/amd64   # add linux/arm64 here if you need it (slow under QEMU)
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/peldrun-backend:${{ needs.prepare.outputs.version }}
+            ghcr.io/${{ steps.owner.outputs.name }}/peldrun-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+      - name: Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/peldrun-frontend:${{ needs.prepare.outputs.version }}
+            ghcr.io/${{ steps.owner.outputs.name }}/peldrun-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

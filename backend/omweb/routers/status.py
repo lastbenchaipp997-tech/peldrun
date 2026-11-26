@@ -16,7 +16,9 @@ from pathlib import Path
 import platform
 import sys
 from typing import Any, Dict
-import winreg
+
+if sys.platform == "win32":
+    import winreg
 
 from fastapi import APIRouter
 from omweb.config import BACKEND_DIR
