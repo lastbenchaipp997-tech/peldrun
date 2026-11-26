@@ -26,7 +26,7 @@ class EngineType(str, Enum):
 
 
 ACTIVE_ENGINE = EngineType.CORE.value
-LEGACY_ENGINE_IDS = {"openmanus", "legacy", "manus"}
+LEGACY_ENGINE_IDS = {"PeldrunWeb", "legacy", "PeldrunApp"}
 VALID_CORE_ALIASES = {"peldrun", "peldrun-core", "core"}
 
 
@@ -78,7 +78,7 @@ def is_core_engine_available() -> bool:
 
 
 def is_legacy_engine_available() -> bool:
-    """Legacy OpenManus runtime has been removed completely. Always returns False."""
+    """Legacy PeldrunWeb runtime has been removed completely. Always returns False."""
     return False
 
 
@@ -111,7 +111,7 @@ def get_active_engine_name() -> str:
 def validate_engine_id(engine_id: str) -> str:
     """
     Validate that an engine identifier or alias is registered and supported.
-    Explicitly rejects OpenManus identifiers.
+    Explicitly rejects PeldrunWeb identifiers.
     """
     if not engine_id or not str(engine_id).strip():
         raise EngineConfigurationError("Engine identifier cannot be empty.")
@@ -120,7 +120,7 @@ def validate_engine_id(engine_id: str) -> str:
 
     if normalized in LEGACY_ENGINE_IDS:
         raise ValueError(
-            "OpenManus is no longer supported. PELDRUN Core is the only execution engine."
+            "PeldrunWeb is no longer supported. PELDRUN Core is the only execution engine."
         )
 
     if normalized in VALID_CORE_ALIASES:

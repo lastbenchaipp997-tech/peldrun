@@ -3,7 +3,7 @@
 PELDRUN Web Handover and Delegation Adapter.
 
 Preserves full backward compatibility with legacy web tool schemas
-(target_agent_id, subtask_prompt) while eliminating obsolete OpenManus (app.*) imports.
+(target_agent_id, subtask_prompt) while eliminating obsolete PeldrunWeb (app.*) imports.
 Under Phase M3, primary autonomous orchestration executes natively via
 PELDRUN Core DelegateTool (delegate_task).
 """
@@ -72,7 +72,7 @@ async def delegate_subtask_to_agent(target_agent_id: str, subtask_prompt: str) -
 
     logger.info("Web delegation handover acknowledged for '%s' (ID: %s)", agent_name, target_agent_id)
 
-    # Clean native response replacing the legacy OpenManus fallback message
+    # Clean native response replacing the legacy PeldrunWeb fallback message
     return (
         f"Handover Notice: Subtask for specialist [{agent_name}] acknowledged. "
         f"Directive: {subtask_prompt[:120]}... "

@@ -4,8 +4,8 @@ backend/omweb/agent_bridge_parts/dispatcher.py
 Authoritative dispatcher entry points for the PELDRUN Universal Agent Bridge.
 
 Dispatches execution strictly to PELDRUN Core via the authoritative EngineRegistry.
-Hardened under PR 1 (Single Execution Authority & OpenManus Decoupling):
-- Rejects legacy OpenManus engine identifiers explicitly (openmanus, legacy, manus).
+Hardened under PR 1 (Single Execution Authority & PeldrunWeb Decoupling):
+- Rejects legacy PeldrunWeb engine identifiers explicitly (PeldrunWeb, legacy, PeldrunApp).
 - Enforces PELDRUN Core as the sole execution engine for all agent tasks.
 - Unifies token accounting, dynamic pricing, and Sidecar context management.
 """
@@ -106,14 +106,14 @@ def _safe_monitor_cancel_run(job_id: str) -> None:
 
 
 SUPPORTED_ENGINE = "peldrun"
-LEGACY_ENGINE_IDS = {"openmanus", "legacy", "manus"}
+LEGACY_ENGINE_IDS = {"PeldrunWeb", "legacy", "PeldrunApp"}
 VALID_CORE_ALIASES = {"peldrun", "peldrun-core", "core"}
 
 
 def validate_requested_engine(value: Optional[str]) -> str:
     """
     Validate engine identifier during runtime dispatch.
-    Explicitly rejects OpenManus identifiers and validates against supported core aliases.
+    Explicitly rejects PeldrunWeb identifiers and validates against supported core aliases.
     Returns the canonical engine identifier 'peldrun'.
     """
     if not value or not str(value).strip():
@@ -123,7 +123,7 @@ def validate_requested_engine(value: Optional[str]) -> str:
 
     if engine_id in LEGACY_ENGINE_IDS:
         raise ValueError(
-            "OpenManus is no longer supported. PELDRUN Core is the only execution engine."
+            "PeldrunWeb is no longer supported. PELDRUN Core is the only execution engine."
         )
 
     if engine_id not in VALID_CORE_ALIASES:
@@ -1534,7 +1534,7 @@ async def run_instrumented(
 ) -> None:
     """
     Dispatch an agent job using PELDRUN Core as the single execution authority.
-    Explicitly rejects legacy OpenManus engine identifiers.
+    Explicitly rejects legacy PeldrunWeb engine identifiers.
     """
     current_task = asyncio.current_task()
     if current_task is not None:

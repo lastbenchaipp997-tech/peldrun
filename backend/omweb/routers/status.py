@@ -5,7 +5,7 @@ PELDRUN Web System Status and Diagnostics Router.
 
 Provides real-time system health checks, memory telemetry, and runtime diagnostics,
 natively reflecting embedded PELDRUN Core as the sole authority.
-Hardened under PR 3: Completely stripped of OpenManus heuristics and external checks.
+Hardened under PR 3: Completely stripped of PeldrunWeb heuristics and external checks.
 """
 
 from __future__ import annotations

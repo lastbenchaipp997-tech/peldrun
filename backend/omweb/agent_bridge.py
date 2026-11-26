@@ -5,7 +5,7 @@ PELDRUN Universal Agent Bridge — Thin Shell Entry Point.
 ================================================================
 
 Authoritative runtime router dispatching execution to PELDRUN Core.
-All legacy OpenManus execution pathways removed under PR 2.
+All legacy PeldrunWeb execution pathways removed under PR 2.
 """
 
 from __future__ import annotations

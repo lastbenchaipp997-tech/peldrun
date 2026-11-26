@@ -3,7 +3,7 @@
 PELDRUN Native Multi-Agent Release Gate Verifier (PR 7).
 
 Executes rigorous automated pre-flight checks across:
-1. Engine Decoupling: Verifies OpenManus is 100% eliminated from runtime registry.
+1. Engine Decoupling: Verifies PeldrunWeb is 100% eliminated from runtime registry.
 2. Multi-Agent Contract Integrity: Verifies DelegationBudget & RunRequest lineage.
 3. Path Traversal Defenses: Verifies WorkspaceBoundary enforcement.
 4. Role-based Delegation Gating: Verifies only Team Lead ('peldrun') receives DelegateTool.
@@ -27,7 +27,7 @@ logger = logging.getLogger("release_gate")
 def run_gate_checks() -> dict[str, bool]:
     results: dict[str, bool] = {}
 
-    # Check 1: Engine Registry Elimination of OpenManus
+    # Check 1: Engine Registry Elimination of PeldrunWeb
     logger.info("CHECK 1: Verifying Engine Registry isolation...")
     try:
         from omweb.engines import engine_registry
@@ -45,7 +45,7 @@ def run_gate_checks() -> dict[str, bool]:
         from omweb.engine_resolver import validate_engine_id, is_legacy_engine_available
         rejected = False
         try:
-            validate_engine_id("openmanus")
+            validate_engine_id("PeldrunWeb")
         except ValueError:
             rejected = True
 

@@ -3,8 +3,8 @@ PELDRUN Universal Engine Integration and Isolation Verification Suite (PR 6).
 
 Executes comprehensive architectural validation across:
 - Test A: Embedded PELDRUN Core execution without external filesystem dependencies.
-- Test B: OpenManus engine isolation and environment scoping.
-- Test C: PELDRUN resilience and zero-impact when OpenManus is unavailable.
+- Test B: PeldrunWeb engine isolation and environment scoping.
+- Test C: PELDRUN resilience and zero-impact when PeldrunWeb is unavailable.
 - Test D: Strict fail-fast engine selection eliminating silent fallback masking.
 - Test E: Store capability lifecycle (Enable/Disable/Assign reflection in Core Registry).
 - Test F: Concurrency safety and zero process-wide CWD side-effects across parallel tasks.
@@ -61,20 +61,20 @@ def main() -> int:
     # TEST B & C: Engine Independence & Fault Isolation
     # ─────────────────────────────────────────────────────────────────
     print("\n[TEST B & C] Verifying Engine Independence & Fault Isolation...")
-    openmanus_engine = engine_registry.get("openmanus")
+    PeldrunWeb_engine = engine_registry.get("PeldrunWeb")
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        om_health = loop.run_until_complete(openmanus_engine.health())
+        om_health = loop.run_until_complete(PeldrunWeb_engine.health())
         pel_health = loop.run_until_complete(peldrun_engine.health())
 
-        print(f"  [*] OpenManus Engine Health: available={om_health.get('available')}, entrypoint={om_health.get('entrypoint')}")
+        print(f"  [*] PeldrunWeb Engine Health: available={om_health.get('available')}, entrypoint={om_health.get('entrypoint')}")
         print(f"  [*] PELDRUN Engine Health: available={pel_health.get('available')}, embedded={pel_health.get('embedded')}")
 
         assert pel_health.get("available") is True
         assert pel_health.get("embedded") is True
-        print("  [OK] Test B & C Passed: PELDRUN Core functions completely independent of OpenManus.")
+        print("  [OK] Test B & C Passed: PELDRUN Core functions completely independent of PeldrunWeb.")
     finally:
         loop.close()
 
@@ -116,8 +116,8 @@ def main() -> int:
             if status_2_val != "failed":
                 print(f"  [FAIL] Failed engine execution did not fail job! status={status_2_val}")
                 return False
-            if "openmanus" in error_2.lower():
-                print("  [FAIL] Silent fallback to OpenManus detected upon Core failure!")
+            if "PeldrunWeb" in error_2.lower():
+                print("  [FAIL] Silent fallback to PeldrunWeb detected upon Core failure!")
                 return False
             print(f"  [OK] Core error propagated authoritatively without silent fallback: {error_2}")
 

@@ -2,13 +2,13 @@
 backend/verify_engine_abstraction.py
 
 Automated Verification Suite for PELDRUN Engine Abstraction Layer.
-Hardened under PR 2: Validates complete removal of OpenManus and exclusive authority of PELDRUN Core.
+Hardened under PR 2: Validates complete removal of PeldrunWeb and exclusive authority of PELDRUN Core.
 
 Validates:
 1. Export integrity of omweb.engines module without legacy engine leaks.
 2. Protocol compliance for PeldrunEngine.
 3. Strict resolution via EngineRegistry (including core aliases).
-4. Confirms legacy identifiers ('openmanus', 'legacy') are strictly rejected.
+4. Confirms legacy identifiers ('PeldrunWeb', 'legacy') are strictly rejected.
 5. Health diagnostic reporting for PELDRUN Core.
 """
 
@@ -68,11 +68,11 @@ def main() -> int:
 
     # 4. Verify Strict Lookup and Legacy Rejection
     try:
-        engine_registry.get("openmanus")
-        print("[FAIL] Registry still resolved legacy 'openmanus' engine!")
+        engine_registry.get("PeldrunWeb")
+        print("[FAIL] Registry still resolved legacy 'PeldrunWeb' engine!")
         return 1
     except EngineNotFoundError:
-        print("[OK] Confirmed: 'openmanus' is no longer registered.")
+        print("[OK] Confirmed: 'PeldrunWeb' is no longer registered.")
 
     try:
         engine_registry.get("legacy")
@@ -111,7 +111,7 @@ def main() -> int:
         loop.close()
 
     print("\n" + "=" * 70)
-    print("PR 2 VERIFICATION RESULT: OPENMANUS REMOVED — ALL CHECKS PASSED (100%)")
+    print("PR 2 VERIFICATION RESULT: PeldrunWeb REMOVED — ALL CHECKS PASSED (100%)")
     print("=" * 70)
     return 0
 

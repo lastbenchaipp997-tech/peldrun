@@ -5,7 +5,7 @@ PELDRUN Universal Engines Architecture Package.
 
 Provides clean engine abstraction, registry management, and native adapters.
 Initializes contracts and registry upfront to guarantee zero circular import cycles.
-Hardened under PR 2: OpenManus engine removed completely.
+Hardened under PR 2: PeldrunWeb engine removed completely.
 PELDRUN Core is the sole registered runtime engine.
 """
 

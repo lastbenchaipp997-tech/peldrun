@@ -4,7 +4,7 @@ backend/omweb/agent_bridge_parts/__init__.py
 PELDRUN Universal Agent Bridge — Modular Package.
 
 Dispatcher package delegating agent execution strictly to PELDRUN Core.
-Legacy OpenManus runners removed under PR 2.
+Legacy PeldrunWeb runners removed under PR 2.
 """
 
 # ─────────────────────────────────────────────────────────────────────
