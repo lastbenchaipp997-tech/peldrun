@@ -43,7 +43,14 @@ export function ImageGallery({
 }: ImageGalleryProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
-  if (!images || images.length === 0) return null;
+  if (!images || images.length === 0) {
+  return (
+    <div className="my-3 rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+      <Images size={24} className="mx-auto mb-2 opacity-50" />
+      No images found{query ? ` for "${query}"` : ""}
+    </div>
+  );
+}
 
   const visibleImages = images.slice(0, maxVisible);
   const hasMore = images.length > maxVisible;

@@ -2604,15 +2604,76 @@ async def run_direct_chat(
             _append_session_log(
                 chat_id, project_id, "SEARCH", f"Web search requested for: {prompt[:120]}"
             )
-            search_tool = WebSearchTool(
-                workspace_root=str(_chat_ws_dir),
+
+            # ------------------------------------------------------------------
+            # [LLM-DRIVEN SEARCH ROUTING]
+            #
+            # Instead of running per-language intent detection (regex or
+            # keyword tables) before the search, we ask the LLM itself to
+            # choose the appropriate tool. Both ``web_search`` and
+            # ``image_search`` are offered via the function-calling
+            # interface; the LLM selects one and supplies a clean search
+            # query. This makes the routing decision:
+            #
+            #   * Language-agnostic — no per-language keyword lists.
+            #   * Context-aware — the LLM understands phrasing nuance.
+            #   * Maintenance-free — adding a language or synonym
+            #     requires no code changes.
+            #
+            # The executor makes a single short non-streaming call
+            # (tool_choice="required") and returns the ToolResult. Error
+            # handling, session logging, and SSE events remain in this
+            # function — the executor only decides and executes.
+            # ------------------------------------------------------------------
+            from .search_tool_executor import execute_search_via_llm_choice
+
+            # Resolve provider routing BEFORE the search call, so the
+            # executor uses the same provider configuration the main
+            # completion will use. This duplicates a small portion of
+            # the provider resolution that happens later in the flow,
+            # but keeps the search block self-contained and avoids
+            # restructuring the adapter creation block.
+            try:
+                _search_provider_id, _search_extra_params = _resolve_provider_and_extras(
+                    active_llm,
+                    connection_id=job_id,
+                )
+                _search_base_url_override = _search_extra_params.pop(
+                    "_peldrun_base_url", None
+                )
+                _search_api_key_override = _search_extra_params.pop(
+                    "_peldrun_api_key", None
+                )
+            except Exception as _search_resolve_err:
+                logger.warning(
+                    "[BRIDGE DIRECT CHAT] Search provider resolution "
+                    "failed for job %s (using fallback): %s",
+                    job_id,
+                    _search_resolve_err,
+                )
+                _search_provider_id = "openai_compat"
+                _search_base_url_override = None
+                _search_api_key_override = None
+
+            search_result, search_tool_used = await execute_search_via_llm_choice(
+                prompt=prompt,
+                provider_id=_search_provider_id,
+                base_url=_search_base_url_override or base_url,
+                api_key=_search_api_key_override or api_key,
+                model_name=model_name,
+                connection_id=job_id,
+                workspace_dir=_chat_ws_dir,
                 run_id=job_id,
                 job_id=job_id,
-                session_id=chat_id,
                 chat_id=chat_id,
                 project_id=project_id,
             )
-            search_result = await search_tool.aexecute(query=prompt)
+
+            if search_tool_used:
+                _append_session_log(
+                    chat_id, project_id, "SEARCH",
+                    f"LLM chose search tool: '{search_tool_used}'",
+                )
 
             # Genuine failure: never claim search succeeded, fail the job clearly.
             if search_result is None or search_result.is_error or search_result.exit_code != 0:

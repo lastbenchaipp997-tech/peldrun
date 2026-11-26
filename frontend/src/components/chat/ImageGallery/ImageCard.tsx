@@ -30,10 +30,22 @@ export function ImageCard({ image, index, onClick }: ImageCardProps) {
     image.thumbnail_url || image.image_url
   );
 
-  const aspectRatio =
-    image.width && image.height
-      ? `${image.width} / ${image.height}`
-      : "4 / 3";
+  // Uniform aspect ratio for every tile so the grid stays even.
+  //
+  // Using the image's NATIVE aspect ratio (image.width / image.height)
+  // made each tile a different height, which produced an irregular,
+  // "masonry-lite" grid that looked messy alongside the fixed
+  // grid-cols-2/3/4 layout. Standard galleries (Google Images,
+  // Unsplash, Instagram) enforce a uniform tile shape and crop the
+  // image via object-cover — the original aspect ratio is still
+  // preserved in the lightbox (where the full image is shown).
+  //
+  // Change this value alone to switch the gallery style:
+  //   "1 / 1"  → Instagram-style squares
+  //   "4 / 3"  → classic landscape (default)
+  //   "16 / 9" → cinematic wide
+  const TILE_ASPECT_RATIO = "4 / 3";
+  const aspectRatio = TILE_ASPECT_RATIO;
 
   const handleError = () => {
     // First failure: try the full image (thumbnail may be missing on
@@ -130,7 +142,7 @@ export function ImageCard({ image, index, onClick }: ImageCardProps) {
           alt={image.title}
           loading="lazy"
           className={`w-full h-full object-cover transition-opacity duration-300 ${
-            isLoading ? "opacity-0" : "opacity-100"
+            isLoading ? "opacity-0 blur-md scale-105" : "opacity-100 blur-0 scale-100"
           }`}
           onLoad={() => setIsLoading(false)}
           onError={handleError}
