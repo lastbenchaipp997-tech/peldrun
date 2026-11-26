@@ -1230,6 +1230,9 @@ export function ChatLanding({
                 }
               >
                 <Globe size={14} className={webSearchEnabled ? "text-rb" : "text-muted-foreground"} />
+
+                <span> Search</span>
+
               </button>
             )}
 

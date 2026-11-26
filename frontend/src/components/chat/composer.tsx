@@ -1732,7 +1732,7 @@ export function Composer({
                 type="button"
                 onClick={() => setWebSearchEnabled((v) => !v)}
                 disabled={disabled || isRunning || isSubmitting}
-                className={`flex items-center text-xs font-medium transition-all cursor-pointer disabled:opacity-40 ${
+                className={`flex items-center gap-1 text-xs font-medium transition-all cursor-pointer disabled:opacity-40 ${
                   webSearchEnabled
                     ? "text-rb shadow-xs"
                     : "text-muted-foreground"
@@ -1744,6 +1744,8 @@ export function Composer({
                 }
               >
                 <Globe size={14} className={webSearchEnabled ? "text-rb" : "text-muted-foreground"} />
+
+                <span>Search</span>
 
               </button>
             )}
