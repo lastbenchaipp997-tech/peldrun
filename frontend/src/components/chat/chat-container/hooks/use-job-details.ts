@@ -124,6 +124,17 @@ interface UseJobDetailsParams {
   setCurrentStepNum: (n: number) => void;
   currentStepNumRef: React.MutableRefObject<number>;
   fetchJobFiles: (jobId: string) => void;
+  /**
+   * Shared "last intent wins" counter owned by ChatContainer.
+   *
+   * Incremented on every explicit user intent (send / regenerate /
+   * new session). Each in-flight hydration captures the counter as its
+   * epoch at start; after the network round-trip completes it compares
+   * the counter against the captured value. If they differ, a newer
+   * intent has taken over and this snapshot MUST NOT be applied — it
+   * would otherwise clobber the live SSE state with stale data.
+   */
+  hydrationEpochRef: React.MutableRefObject<number>;
   // [Phase F.3.b] connectStream now accepts the chatId and seeding
   // metadata. This mirrors the signature exposed by useSseStream
   // (chat-container/hooks/use-sse-stream.ts) after Phase F.3.a, which
@@ -200,12 +211,19 @@ export function useJobDetails(params: UseJobDetailsParams) {
 
   return useCallback(async (jobId: string) => {
     const p = paramsRef.current;
+    // Each hydration claims a new epoch. A send, a new session or a newer
+    // hydration bumps the counter, which invalidates this one.
+    const epoch = ++p.hydrationEpochRef.current;
 
     try {
       const res = await fetch(`/api/run/jobs/${jobId}`);
       if (!res.ok) return;
 
       const data = await res.json();
+      if (p.hydrationEpochRef.current !== epoch) {
+        console.warn("[hydrate] dropped stale snapshot", { jobId, epoch });
+        return;
+      }
       if (data.chat_id) p.setActiveChatId(data.chat_id);
       if (data.prompt) p.setSubmittedPrompt(data.prompt);
       // Project the current turn's multimodal attachments. Populated

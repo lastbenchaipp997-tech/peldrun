@@ -164,7 +164,6 @@ export interface ChatThreadProps {
   showRawTrace: boolean;
   setShowRawTrace: (val: boolean) => void;
   getLiveStatusMessage: () => string;
-  chatScrollBottomRef: React.RefObject<HTMLDivElement | null>;
   activeModelName?: string;
   /**
    * Currently-selected provider display name (from useAppStorage

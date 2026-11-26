@@ -28,6 +28,7 @@ import type {
 // local UI state (steps, finalResult, humanQuery, ...).
 import { runStreamManager } from "@/lib/run-stream-manager";
 import { useToolStreamBuffer } from "@/lib/use-tool-stream-buffer";
+import { useTextDeltaBuffer } from "./use-text-delta-buffer";
 
 /**
  * Metadata for an MCP server that requires credentials before it can
@@ -235,7 +236,66 @@ export function useSseStream(params: UseSseStreamParams) {
       });
     });
 
+  // Text-delta batching: one setState per animation frame instead of one
+  // per token. Three independent streams, each with its own buffer.
+  const thoughtStepRef = useRef(1);
+  const lastModelRef = useRef<string | null>(null);
+  const lastSeqRef = useRef(0);
+
+  const { push: pushChunk, flush: flushChunks, discard: discardChunks } =
+    useTextDeltaBuffer((text) => {
+      paramsRef.current.setFinalResult((prev) => (prev ? prev + text : text));
+    });
+
+  const {
+    push: pushReasoning,
+    flush: flushReasoning,
+    discard: discardReasoning,
+  } = useTextDeltaBuffer((text) => {
+    paramsRef.current.setChatReasoningText?.((prev) => prev + text);
+  });
+
+  const {
+    push: pushThought,
+    flush: flushThoughts,
+    discard: discardThoughts,
+  } = useTextDeltaBuffer((text) => {
+    const step = thoughtStepRef.current;
+    paramsRef.current.setSteps((prev) => {
+      const lastIdx = prev.length - 1;
+      if (
+        lastIdx >= 0 &&
+        prev[lastIdx].type === "thought" &&
+        prev[lastIdx].step === step
+      ) {
+        const updated = [...prev];
+        updated[lastIdx] = {
+          ...updated[lastIdx],
+          content: updated[lastIdx].content + text,
+        };
+        return updated;
+      }
+      return [
+        ...prev,
+        {
+          id: `thought-${step}-${Date.now()}`,
+          step,
+          type: "thought",
+          content: text,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+    });
+  });
+
+  const discardAllBuffers = useCallback(() => {
+    discardChunks();
+    discardReasoning();
+    discardThoughts();
+  }, [discardChunks, discardReasoning, discardThoughts]);
+
   const closeStream = useCallback(() => {
+    discardAllBuffers(); // a closed run must never publish buffered text
     // Drop the local subscription. This does NOT disconnect the
     // manager from the SSE stream — the manager owns the connection
     // lifecycle independently and may be tracking other jobs. To
@@ -253,7 +313,7 @@ export function useSseStream(params: UseSseStreamParams) {
       unsubscribeRef.current = null;
     }
     currentJobIdRef.current = null;
-  }, []);
+  }, [discardAllBuffers]);
 
   const connectStream = useCallback(
     (
@@ -281,6 +341,9 @@ export function useSseStream(params: UseSseStreamParams) {
       }
 
       currentJobIdRef.current = jobId;
+      discardAllBuffers();
+      lastSeqRef.current = 0;
+      lastModelRef.current = null;
       const resolvedChatId = chatId || jobId;
 
       // Reset accumulated image state on every fresh connection.
@@ -333,6 +396,20 @@ export function useSseStream(params: UseSseStreamParams) {
     const handleEventPayload = (eventType: string, payload: any) => {
       const ctx = p();
 
+      // Ordering: buffered text must land BEFORE any state mutation that
+      // follows it in the stream (e.g. a tool_call step after a thought).
+      if (eventType !== "thought") {
+        flushThoughts();
+        flushReasoning();
+      }
+      if (
+        eventType !== "chunk" &&
+        eventType !== "final" &&
+        eventType !== "error"
+      ) {
+        flushChunks();
+      }
+
       // Normalize aliases so both "tool_call" and "tool_called" trigger the same logic.
       const normalizedType =
         eventType === "tool_called"
@@ -361,8 +438,14 @@ export function useSseStream(params: UseSseStreamParams) {
       ctx.setCurrentStepNum(step);
       ctx.currentStepNumRef.current = step;
 
-      if (payload.data?.model) {
-        ctx.setActiveModelName(payload.data.model);
+      const evModel = payload.data?.model;
+      if (
+        typeof evModel === "string" &&
+        evModel &&
+        evModel !== lastModelRef.current
+      ) {
+        lastModelRef.current = evModel;
+        ctx.setActiveModelName(evModel);
       }
 
       const logTimestamp = new Date().toLocaleTimeString();
@@ -383,6 +466,7 @@ export function useSseStream(params: UseSseStreamParams) {
         // until the retry starts streaming again. An empty string
         // would render an empty styled block.
         if (payload.data?.reset === true) {
+          discardChunks();
           ctx.setFinalResult(null);
           return;
         }
@@ -392,9 +476,7 @@ export function useSseStream(params: UseSseStreamParams) {
           payload.data?.text ??
           payload.data?.content ??
           (typeof payload.data === "string" ? payload.data : "");
-        if (delta) {
-          ctx.setFinalResult((prev) => (prev ? prev + delta : delta));
-        }
+        if (delta) pushChunk(delta);
       } else if (eventType === "thought") {
         // [CHAT-REASONING] Chat mode uses a dedicated reasoning
         // channel — NOT the step-based timeline. Chat mode has a
@@ -418,6 +500,7 @@ export function useSseStream(params: UseSseStreamParams) {
         // agent-mode reset clears the trailing thought steps.
         if (ctx.execMode === "chat" && ctx.setChatReasoningText) {
           if (payload.data?.reset === true) {
+            discardReasoning();
             ctx.setChatReasoningText("");
             return;
           }
@@ -430,10 +513,11 @@ export function useSseStream(params: UseSseStreamParams) {
           const rendered = safeRender(raw);
           if (!rendered) return;
           if (isDelta) {
-            ctx.setChatReasoningText((prev) => prev + rendered);
+            pushReasoning(rendered);
           } else {
             // A non-delta emission carries the complete text — replace
             // rather than append.
+            discardReasoning();
             ctx.setChatReasoningText(rendered);
           }
           return;
@@ -455,6 +539,7 @@ export function useSseStream(params: UseSseStreamParams) {
         // step. Thought steps from earlier completed steps are kept —
         // only the current step's reasoning is being restarted.
         if (payload.data?.reset === true) {
+          discardThoughts();
           ctx.setSteps((prev) => {
             const next = [...prev];
             // Pop trailing thought steps belonging to THIS step.
@@ -496,38 +581,22 @@ export function useSseStream(params: UseSseStreamParams) {
 
         if (shouldProcess) {
           if (isDelta) {
-            ctx.setSteps((prev) => {
-              const lastIdx = prev.length - 1;
-              if (
-                lastIdx >= 0 &&
-                prev[lastIdx].type === "thought" &&
-                prev[lastIdx].step === step
-              ) {
-                const updated = [...prev];
-                updated[lastIdx] = {
-                  ...updated[lastIdx],
-                  content: updated[lastIdx].content + rendered,
-                };
-                return updated;
-              }
-              return [
-                ...prev,
-                {
-                  id: `thought-${step}-${Date.now()}`,
-                  step,
-                  type: "thought",
-                  content: rendered,
-                  timestamp: new Date().toLocaleTimeString(),
-                },
-              ];
-            });
+            if (thoughtStepRef.current !== step) {
+              flushThoughts(); // finish the previous step first
+              thoughtStepRef.current = step;
+            }
+            pushThought(rendered);
           } else {
+            flushThoughts();
             appendStep("thought", raw, step);
           }
-          ctx.setExpandedSteps((prev) => ({
-            ...prev,
-            [`active-${step}`]: true,
-          }));
+          // Stable identity when already expanded. The old code built a new
+          // object on every token, forcing a render per token.
+          ctx.setExpandedSteps((prev) =>
+            prev[`active-${step}`]
+              ? prev
+              : { ...prev, [`active-${step}`]: true }
+          );
           if (!isDelta) {
             logEntry(`[${logTimestamp}] [THOUGHT] ${rendered}`);
           }
@@ -899,6 +968,7 @@ export function useSseStream(params: UseSseStreamParams) {
         // tool's last write happened in the same frame as the final
         // event.
         flushToolOutputStream();
+        if (eventType === "final") discardChunks(); // final replaces the whole text
 
         // [TOOL_CALL_STARTING] Remove any orphaned pending
         // placeholders entirely. The model abandoned them, so showing
@@ -1187,6 +1257,7 @@ export function useSseStream(params: UseSseStreamParams) {
         // Flush pending chunks so the user sees the last output
         // before the error card renders.
         flushToolOutputStream();
+        discardChunks(); // the error text replaces the partial answer
 
         // [TOOL_CALL_STARTING] Remove orphaned pending placeholders on
         // error as well. Same rationale as the `final` handler above.
@@ -1343,6 +1414,26 @@ export function useSseStream(params: UseSseStreamParams) {
       // initial sync (so consumers can read the current state without
       // a race). We only process real events.
       if (!envelope) return;
+
+      // Identity guard: closeStream() nulls currentJobIdRef and
+      // connectStream() overwrites it, so an event belonging to a
+      // previous job can never project into the current turn.
+      if (currentJobIdRef.current !== jobId) {
+        if (DEBUG_SSE) {
+          console.warn("[SSE] dropped stale event", envelope.type, { jobId });
+        }
+        return;
+      }
+
+      // Replay guard: the manager notifies subscribers for EVERY
+      // envelope, including ones re-sent after a reconnect, and this
+      // projection is append-only. Only skip when a numeric sequence
+      // proves it is a replay.
+      const seq = envelope.sequence;
+      if (typeof seq === "number") {
+        if (seq <= lastSeqRef.current) return;
+        lastSeqRef.current = seq;
+      }
 
       try {
         handleEventPayload(envelope.type as string, envelope);

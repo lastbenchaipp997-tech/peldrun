@@ -18,7 +18,9 @@
  * presentational shell that delegates to focused sub-components.
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
+import { ArrowDown } from "lucide-react";
+import { useStickToBottom } from "use-stick-to-bottom";
 import { useProviderBadge } from "@/lib/providerBadge";
 import { ProviderModelBadge } from "./ProviderModelBadge";
 import { ChatTimeline, StepEvent } from "../chat-timeline";
@@ -85,7 +87,6 @@ export function ChatThread({
   showRawTrace,
   setShowRawTrace,
   getLiveStatusMessage,
-  chatScrollBottomRef,
   activeModelName = "Assistant",
   activeProvider,
   currentTurnProvider,
@@ -102,8 +103,6 @@ export function ChatThread({
   onRegenerate,
   onOpenReview,
 }: ChatThreadProps) {
-  const activePromptAnchorRef = useRef<HTMLDivElement | null>(null);
-
   // Two distinct provider values flow into this component:
   //
   //   * `activeProvider` — the user's CURRENT EngineSelector selection
@@ -124,15 +123,19 @@ export function ChatThread({
   const displayModel = currentTurnModel ?? activeModelName;
   const displayProviderBadge = useProviderBadge(displayProvider);
 
-  // Auto-scroll to the active prompt anchor when a new prompt is submitted.
+  // Stick-to-bottom scroll owner. Replaces the two competing
+  // `scrollIntoView({ smooth })` calls that previously lived here and
+  // in ChatContainer. The library pauses "stick" only while the user
+  // is scrolled up (reading), and resumes automatically once they
+  // return to the bottom — so streaming never fights the user's input.
+  const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
+    useStickToBottom({ resize: "smooth", initial: "instant" });
+
+  // Sending is an explicit "take me to the bottom" intent, so it
+  // re-engages the lock even if the user had scrolled up earlier.
   useEffect(() => {
-    if (submittedPrompt) {
-      activePromptAnchorRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-      });
-    }
-  }, [submittedPrompt]);
+    if (submittedPrompt) void scrollToBottom();
+  }, [submittedPrompt, historyTurns.length, scrollToBottom]);
 
   // Detect whether the agent is currently paused waiting for human input.
   const activeStepsList = Object.values(activeGroupedSteps || {}).flat();
@@ -209,9 +212,13 @@ export function ChatThread({
   );
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 sm:p-5 font-sans">
-      <div className="w-full max-w-[900px] mx-auto space-y-6">
-        {/* Historical Turns */}
+    <div className="relative flex-1 min-h-0 flex flex-col">
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 font-sans"
+      >
+        <div ref={contentRef} className="w-full max-w-[900px] mx-auto space-y-6">
+          {/* Historical Turns */}
         {historyTurns.map((turn, tIdx) => (
           <div key={turn.id || `turn-${tIdx}`}>
             <HistoricalTurn
@@ -234,7 +241,7 @@ export function ChatThread({
 
         {/* Current Active Turn Prompt */}
         {submittedPrompt && (
-          <div ref={activePromptAnchorRef} className="space-y-4">
+          <div className="space-y-4">
             <UserMessageBubble
               prompt={submittedPrompt}
               files={submittedFiles}
@@ -381,8 +388,20 @@ export function ChatThread({
           />
         )}
 
-        <div ref={chatScrollBottomRef} />
+        </div>
       </div>
+
+      {!isAtBottom && (
+        <button
+          type="button"
+          onClick={() => void scrollToBottom()}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center
+          gap-1.5 rounded-full border border-card bg-card px-3 py-1.5 font-mono text-xs text-blck shadow-xl hover:text-foreground"
+        >
+          <ArrowDown size={14} />
+          {status === "running" ? "Jump to live" : "Jump to latest"}
+        </button>
+      )}
     </div>
   );
 }

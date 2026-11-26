@@ -632,6 +632,21 @@ export function ChatContainer({
   // even if the user switches modes before sending the next message.
   const runStartModeRef = useRef<"agent" | "chat">(execMode);
 
+  // Guards `handleStartTask` against concurrent sends. `status` is a
+  // closure snapshot, so two sends in the same tick (double Enter) or a
+  // send during the attachment-upload await both still see "completed"
+  // and both pass the status guard. A ref flips synchronously.
+  const sendLockRef = useRef(false);
+  // Shared "last intent wins" counter consumed by useJobDetails. Each
+  // hydration captures the current value as its epoch; a newer send /
+  // regenerate / new-session bumps it, invalidating any in-flight
+  // snapshot. See use-job-details.ts §4.3b.
+  const hydrationEpochRef = useRef(0);
+  // Tracks the most recent `initialJobId` already hydrated so the
+  // hydration effect cannot re-fire for the same id when its
+  // dependencies churn (see I4b).
+  const resolvedJobIdRef = useRef<string | null>(null);
+
   // Tracks the safety-net timer created by handleStopTask. Declared
   // here (not further down) because it is referenced by the status
   // effect below AND by handleStopTask. Placing it before the first
@@ -661,7 +676,10 @@ export function ChatContainer({
   const { connectStream, closeStream, eventSourceRef } = useSseStream({
     currentStepNumRef,
     activeChatIdRef,
-    execMode,
+    // The mode the CURRENT RUN started with (same source ChatThread
+    // renders by). Using the live selector here sent reasoning to the
+    // wrong place when the user toggled the mode mid-run.
+    execMode: runStartModeRef.current,
     setSteps,
     setCurrentStepNum,
     setActiveModelName,
@@ -684,6 +702,8 @@ export function ChatContainer({
   });
 
   const fetchJobDetails = useJobDetails({
+    // Shared "last intent wins" counter (see use-job-details.ts §4.3).
+    hydrationEpochRef,
     setActiveChatId,
     setSubmittedPrompt,
     setSubmittedFiles,
@@ -714,8 +734,6 @@ export function ChatContainer({
     connectStream,
   });
 
-  const chatScrollBottomRef = useRef<HTMLDivElement | null>(null);
-
   // --- Effects --------------------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -725,12 +743,6 @@ export function ChatContainer({
     window.addEventListener("omweb:model-change", onModelChange);
     return () => window.removeEventListener("omweb:model-change", onModelChange);
   }, [setActiveModelName]);
-
-  useEffect(() => {
-    if (status === "running" || steps.length > 0 || submittedPrompt) {
-      chatScrollBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [steps, status, finalResult, submittedPrompt]);
 
   useEffect(() => {
     const handleSandboxEvent = (e: Event) => {
@@ -834,12 +846,19 @@ export function ChatContainer({
   useEffect(() => {
     if (activeChatId === null) {
       resolvedChatIdRef.current = null;
+      resolvedJobIdRef.current = null;
     }
   }, [activeChatId]);
 
   useEffect(() => {
     // ── Legacy path: explicit jobId ──
     if (initialJobId) {
+      // Hydrate at most once per id, in this mount cycle. The
+      // surrounding effect lists `activeChatId` / `activeJobId` as
+      // dependencies; without this guard, every such change would
+      // re-fetch and overwrite the live turn with a stale snapshot.
+      if (resolvedJobIdRef.current === initialJobId) return;
+      resolvedJobIdRef.current = initialJobId;
       setActiveJobId(initialJobId);
       fetchJobDetails(initialJobId);
       return;
@@ -940,7 +959,11 @@ export function ChatContainer({
       if (match?.job_id) {
         setActiveChatId(match.id);
         setActiveJobId(match.job_id);
-        fetchJobDetails(match.job_id);
+        // Await the snapshot before hiding the spinner so the composer
+        // never appears with a half-populated turn. fetchJobDetails
+        // swallows its own errors internally, so this cannot throw.
+        await fetchJobDetails(match.job_id);
+        if (cancelled) return;
       } else {
         // Chat id exists in URL but the backend has no record of it.
         // Preserve the id so the next POST /api/run attaches to it.
@@ -1026,6 +1049,9 @@ export function ChatContainer({
   // --- Session control ------------------------------------------------------
   const handleNewSession = useCallback(() => {
     closeStream();
+    // Invalidate any in-flight hydration so it cannot repopulate this
+    // fresh session with the previous chat's snapshot.
+    hydrationEpochRef.current++;
     setInputValue("");
     setLandingAttachedFiles([]);
     setSubmittedPrompt("");
@@ -1299,7 +1325,7 @@ export function ChatContainer({
   }, []);
 
   // --- Task dispatch --------------------------------------------------------
-  const handleStartTask = useCallback(
+  const startTaskInner = useCallback(
     async (
       customPrompt?: string,
       customOverride?: any,
@@ -1488,6 +1514,11 @@ export function ChatContainer({
         ...refAttachments,
         ...imageAttachments,
       ];
+
+      // Detach from the previous run BEFORE mutating any state, and
+      // invalidate any in-flight snapshot (see use-job-details).
+      closeStream();
+      hydrationEpochRef.current++;
 
       // Archive the current turn before starting a new one.
       //
@@ -1727,7 +1758,43 @@ export function ChatContainer({
       // captures "" from the initial state and every archived turn
       // ends up with an empty reasoning panel.
       chatReasoningText,
+      // Required so the hook can detach from the previous run before
+      // mutating state (see the closeStream() call above).
+      closeStream,
     ]
+  );
+
+  /**
+   * Public entry point for starting a run.
+   *
+   * Wraps `startTaskInner` with a synchronous ref-based send lock so
+   * that two dispatches in the same tick (double Enter, or a send that
+   * races the previous send's attachment upload) cannot both pass the
+   * `status` guard and produce two jobs / a double-archived turn.
+   */
+  const handleStartTask = useCallback(
+    async (
+      customPrompt?: string,
+      customOverride?: any,
+      filesToUpload?: File[],
+      isAuthRetry: boolean = false
+    ) => {
+      if (sendLockRef.current) {
+        throw new Error("A send is already in progress.");
+      }
+      sendLockRef.current = true;
+      try {
+        return await startTaskInner(
+          customPrompt,
+          customOverride,
+          filesToUpload,
+          isAuthRetry
+        );
+      } finally {
+        sendLockRef.current = false;
+      }
+    },
+    [startTaskInner]
   );
 
   // --- MCP Authentication Handlers ------------------------------------------
@@ -1786,6 +1853,9 @@ export function ChatContainer({
         // Regenerating the current/latest completed turn
         const promptToRerun = submittedPrompt;
         if (!promptToRerun) return;
+
+        closeStream();
+        hydrationEpochRef.current++;
 
         setStatus("running");
         setSteps([]);
@@ -1873,6 +1943,9 @@ export function ChatContainer({
 
         const promptToRerun = targetTurn.prompt;
         const targetTurnId = targetTurn.jobId || String(turnIndex);
+
+        closeStream();
+        hydrationEpochRef.current++;
 
         setHistoryTurns((prev) => prev.slice(0, turnIndex));
         setSubmittedPrompt(promptToRerun);
@@ -1974,6 +2047,9 @@ export function ChatContainer({
       // Required so regeneration dispatches to the correct project
       // workspace (memory scope, file routes, artifact targets).
       projectId,
+      // Required so the handler can detach from the previous run and
+      // invalidate any in-flight snapshot before mutating state.
+      closeStream,
     ]
   );
 
@@ -2052,6 +2128,16 @@ export function ChatContainer({
     status === "retrying"
       ? "running"
       : status;
+
+  // Grouping is a pure reduction over `steps`. Previously it ran inline
+  // in the JSX (`groupStepEvents(steps)`), so every parent re-render —
+  // including composer keystrokes, right-panel toggles, and the
+  // elapsed-timer tick — re-walked the entire step list. Memoizing on
+  // `steps` collapses that to one walk per actual stream mutation.
+  const activeGroupedSteps = useMemo(
+    () => (runStartModeRef.current === "agent" ? groupStepEvents(steps) : {}),
+    [steps]
+  );
 
   // --- Render ---------------------------------------------------------------
   return (
@@ -2154,9 +2240,7 @@ export function ChatContainer({
             // the turn that actually produced them, even after the
             // user toggles the mode for the next message.
             execMode={runStartModeRef.current}
-            activeGroupedSteps={
-              runStartModeRef.current === "agent" ? groupStepEvents(steps) : {}
-            }
+            activeGroupedSteps={activeGroupedSteps}
             chatReasoningText={
               runStartModeRef.current === "chat" ? chatReasoningText : ""
             }
@@ -2198,7 +2282,6 @@ export function ChatContainer({
             // already displayed.
             currentTurnProvider={runStartProviderRef.current ?? undefined}
             currentTurnModel={runStartModelRef.current ?? undefined}
-            chatScrollBottomRef={chatScrollBottomRef}
             tokensUsed={tokensUsed}
             costUsd={currentCostUsd}
             latencyMs={currentLatencyMs}

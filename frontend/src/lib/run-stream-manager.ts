@@ -80,6 +80,7 @@ import type { SSEEnvelope, ServerEventName, RunState, RunStatus } from "@/lib/ty
 // Until then, importing from the component folder is the cheapest way to
 // avoid drift between the two consumers.
 import {
+  DEBUG_SSE,
   SSE_EVENT_TYPES,
   DELEGATION_EVENT_TYPES,
 } from "@/components/chat/chat-container/constants";
@@ -663,13 +664,9 @@ class RunStreamManager {
     // built-in error with a non-empty `.data` payload).
     if (connection.terminalReached) return;
 
-    // DIAGNOSTIC (temporary) — remove after verification
-    console.log(
-      "[RunStreamManager] event received: job=%s type=%s step=%s",
-      jobId,
-      eventType,
-      raw?.step,
-    );
+    if (DEBUG_SSE) {
+      console.debug("[RunStreamManager] event", jobId, eventType, raw?.step);
+    }
 
     const envelope = buildEnvelope(jobId, eventType, raw);
 
