@@ -216,7 +216,7 @@ const MERMAID_FALLBACK_STRATEGIES: ReadonlyArray<(src: string) => string> = [
  *
  * Mermaid requires the container to be part of the live document so it can
  * measure text and compute layout. The container is visually hidden by
- * being positioned far outside the viewport with zero size.
+ * being positioned far outside the viewport with visibility hidden.
  */
 function createHiddenContainer(): HTMLDivElement {
   const container = document.createElement("div");
@@ -225,9 +225,13 @@ function createHiddenContainer(): HTMLDivElement {
   container.style.position = "fixed";
   container.style.left = "-100000px";
   container.style.top = "-100000px";
-  container.style.width = "0";
-  container.style.height = "0";
-  container.style.overflow = "hidden";
+  // Some Mermaid renderers (gantt in particular) size themselves from the
+  // parent element's offsetWidth, so a zero-width host produces a zero-width
+  // chart. Give the host a realistic layout width instead. It stays invisible
+  // because it is far off-screen and has visibility: hidden.
+  container.style.width = "1200px";
+  container.style.height = "auto";
+  container.style.overflow = "visible";
   container.style.pointerEvents = "none";
   container.style.visibility = "hidden";
   container.style.zIndex = "-2147483647";
@@ -263,45 +267,66 @@ function sanitizeSvg(rawSvg: string): string {
     return rawSvg;
   }
 
-  try {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(rawSvg, "image/svg+xml");
+  // Mermaid serializes foreignObject labels as HTML (for example "<br>" and
+  // "&nbsp;"), which is not well-formed XML. Parsing with "image/svg+xml"
+  // fails with "Opening and ending tag mismatch" and the parser returns an
+  // error document instead of throwing. The sanitized markup is injected via
+  // dangerouslySetInnerHTML (an HTML parse), so the HTML parser is the
+  // correct choice here as well. HTML parsing never produces parse errors.
+  const doc = new DOMParser().parseFromString(rawSvg, "text/html");
+  const svgRoot = doc.body.querySelector("svg");
 
-    // Elements that are always removed, wherever they appear.
-    const alwaysBlocked = ["script", "iframe", "object", "embed"];
-    alwaysBlocked.forEach((tagName) => {
-      doc.querySelectorAll(tagName).forEach((el) => el.remove());
-    });
-
-    /**
-     * Removes dangerous attributes from a single element.
-     * Applied to every element in the SVG tree.
-     */
-    const sanitizeElementAttributes = (el: Element) => {
-      const attributes = Array.from(el.attributes);
-      for (const attr of attributes) {
-        const attrName = attr.name.toLowerCase();
-        const attrValue = attr.value.trim().toLowerCase();
-
-        const isEventHandler = attrName.startsWith("on");
-        const isDangerousUri =
-          attrValue.startsWith("javascript:") ||
-          attrValue.startsWith("data:text/html") ||
-          attrValue.startsWith("vbscript:");
-
-        if (isEventHandler || isDangerousUri) {
-          el.removeAttribute(attr.name);
-        }
-      }
-    };
-
-    doc.querySelectorAll("*").forEach(sanitizeElementAttributes);
-
-    return new XMLSerializer().serializeToString(doc.documentElement);
-  } catch (err) {
-    console.warn("[PeldrunDiagram] SVG sanitization failed:", err);
-    return "";
+  if (!svgRoot) {
+    throw new Error("Rendered output did not contain a valid SVG element.");
   }
+
+  // Elements that are always removed, wherever they appear.
+  svgRoot
+    .querySelectorAll(
+      "script, iframe, object, embed, frame, frameset, applet, meta, link, base"
+    )
+    .forEach((el) => el.remove());
+
+  /**
+   * Detects URI schemes that can execute script or render active HTML.
+   * Whitespace and control characters are stripped first because browsers
+   * ignore them inside a URL scheme ("java\tscript:" still executes).
+   */
+  const hasDangerousUriScheme = (value: string): boolean => {
+    // eslint-disable-next-line no-control-regex
+    const compact = value.replace(/[\u0000-\u0020\u007f-\u009f]+/g, "").toLowerCase();
+    return (
+      compact.startsWith("javascript:") ||
+      compact.startsWith("vbscript:") ||
+      compact.startsWith("data:text/html")
+    );
+  };
+
+  /**
+   * Removes dangerous attributes from a single element.
+   * Applied to the root element and to every descendant.
+   */
+  const sanitizeElementAttributes = (el: Element) => {
+    for (const attr of Array.from(el.attributes)) {
+      const attrName = attr.name.toLowerCase();
+
+      if (
+        attrName.startsWith("on") ||
+        attrName === "srcdoc" ||
+        hasDangerousUriScheme(attr.value)
+      ) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  };
+
+  sanitizeElementAttributes(svgRoot);
+  svgRoot.querySelectorAll("*").forEach(sanitizeElementAttributes);
+
+  // The HTML serializer matches how the markup will be parsed again by
+  // dangerouslySetInnerHTML. Mermaid's own "strict" security level already
+  // runs DOMPurify, so this function is a second layer of defense.
+  return svgRoot.outerHTML;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +388,51 @@ function buildThemeVariables(isDark: boolean): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Clipboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Copies text to the clipboard and reports whether it actually succeeded.
+ *
+ * navigator.clipboard is undefined in insecure contexts (plain HTTP on a
+ * host other than localhost), and writeText() rejects when permission is
+ * denied or the document is not focused. In those cases a hidden textarea
+ * plus document.execCommand("copy") is used as a fallback. execCommand is
+ * deprecated, but it remains the only option that works in those contexts.
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy path below.
+  }
+
+  const previouslyFocused = document.activeElement as HTMLElement | null;
+  const textarea = document.createElement("textarea");
+
+  try {
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-100000px";
+    textarea.style.top = "0";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    // Always clean up and give focus back to the element that had it.
+    textarea.remove();
+    previouslyFocused?.focus?.();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -378,6 +448,12 @@ export function PeldrunDiagram({
   const [copied, setCopied] = useState(false);
   const [showSource, setShowSource] = useState(false);
 
+  // Tracks the app color scheme so diagrams are re-rendered with the matching
+  // Mermaid theme when the user switches between light and dark mode. It starts
+  // as false to match server-rendered markup and is synced from the DOM in an
+  // effect right after mount.
+  const [isDark, setIsDark] = useState(false);
+
   // [FIX-TELEMETRY-2] Previously captured actions via useRef at mount time.
   // If the store module is re-instantiated (HMR, or persist rehydration),
   // the captured reference kept mutating the OLD store instance, so counters
@@ -388,6 +464,17 @@ export function PeldrunDiagram({
   // Ensures a single diagram instance reports at most one telemetry event
   // per unique source string, even across re-renders.
   const recordedSourceRef = useRef<string | null>(null);
+
+  // Monotonic counter that gives every render run unique Mermaid element ids,
+  // so a superseded in-flight run can never collide with the current one.
+  const renderRunCounterRef = useRef(0);
+
+  // Handle of the pending "copied" feedback reset, kept so it can be cancelled
+  // on repeated clicks and on unmount.
+  const copyResetTimerRef = useRef<number | null>(null);
+
+  // Guards async work that resolves after the component has unmounted.
+  const isMountedRef = useRef(true);
 
   const reactId = useId().replace(/:/g, "_");
 
@@ -418,26 +505,63 @@ export function PeldrunDiagram({
   }, []);
 
   // -------------------------------------------------------------------------
+  // Color scheme tracking
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const root = document.documentElement;
+    const readScheme = () => root.classList.contains("dark");
+
+    setIsDark(readScheme());
+
+    // The app toggles the "dark" class on the document root. Observing only
+    // the class attribute keeps this cheap, and setState bails out when the
+    // value did not actually change.
+    const observer = new MutationObserver(() => {
+      setIsDark(readScheme());
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+
+    return () => observer.disconnect();
+  }, []);
+
+  // -------------------------------------------------------------------------
   // Render effect
   // -------------------------------------------------------------------------
   useEffect(() => {
-    let isMounted = true;
+    // Flipped by the cleanup function when this effect run is superseded (the
+    // source changed while streaming, a dependency changed, or the component
+    // unmounted). Every await point below checks it, so a superseded run never
+    // writes state, touches the host container, or reports telemetry.
+    let cancelled = false;
+
+    // Coalesces rapid source updates while a response is still streaming, so
+    // partial diagrams are not rendered one by one.
+    const RENDER_DEBOUNCE_MS = 150;
 
     async function renderDiagram(): Promise<void> {
       if (!normalizedSource) {
-        if (isMounted) {
-          setSvgHtml("");
-          setError(null);
-        }
+        setSvgHtml("");
+        setError(null);
         return;
       }
 
       const host = hostRef.current;
       if (!host) {
-        // The host container has not been created yet. This can happen on
-        // the very first render pass before the layout effect fires.
+        // Fail visibly instead of leaving the spinner running forever.
+        setSvgHtml("");
+        setError("Diagram host container is not available.");
         return;
       }
+
+      // Unique per run, so Mermaid element ids can never collide with those
+      // of a superseded run that is still finishing in the background.
+      const runId = (renderRunCounterRef.current += 1);
+
+      const clearHost = () => {
+        while (host.firstChild) {
+          host.removeChild(host.firstChild);
+        }
+      };
 
       const reportSuccess = (latencyMs: number = 0) => {
         if (!telemetry) return;
@@ -453,10 +577,20 @@ export function PeldrunDiagram({
         useGenerativeUIStore.getState().recordError("mermaid");
       };
 
+      /** Surfaces a failure in the UI and records it through telemetry. */
+      const fail = (cause: unknown, fallbackMessage: string) => {
+        const message =
+          (cause as { message?: string } | null)?.message ||
+          (typeof cause === "string" ? cause : null) ||
+          fallbackMessage;
+        setError(message);
+        setSvgHtml("");
+        reportError();
+      };
+
       try {
-        const isDark =
-          typeof document !== "undefined" &&
-          document.documentElement.classList.contains("dark");
+        // The color scheme comes from the isDark state, which the color scheme
+        // effect above keeps in sync with the document root.
 
         // Mermaid v11+ removed `htmlLabels` from several diagram configs
         // (sequence, er, journey) and TypeScript rejects the option on those
@@ -507,74 +641,106 @@ export function PeldrunDiagram({
           previousCandidate = candidate;
         }
 
+        let renderedSvg: string | null = null;
+        let renderDurationMs = 0;
         let lastError: unknown = null;
 
         for (let i = 0; i < attempts.length; i += 1) {
+          if (cancelled) return;
+
           const candidate = attempts[i];
-          const renderId = `peldrun_mermaid_${reactId}_${i}`;
+          const renderId = `peldrun_mermaid_${reactId}_${runId}_${i}`;
 
           // Clear the host before each attempt. We never let Mermaid
           // create its own container in document.body.
-          while (host.firstChild) {
-            host.removeChild(host.firstChild);
-          }
+          clearHost();
 
+          // Only Mermaid's parse and layout step lives inside this try block.
+          // A failure here is a syntax problem, so a simpler variant of the
+          // source is worth trying. Sanitization failures are handled after
+          // the loop and must never trigger a retry.
           try {
-            const _renderStartedAt =
-              typeof performance !== "undefined" ? performance.now() : 0;
+            const startedAt = performance.now();
             const { svg } = await mermaid.render(renderId, candidate, host);
-            const _renderDurationMs =
-              typeof performance !== "undefined"
-                ? Math.round(performance.now() - _renderStartedAt)
-                : 0;
+            if (cancelled) return;
 
-            if (isMounted) {
-              const sanitized = sanitizeSvg(svg);
-              setSvgHtml(sanitized);
-              setError(null);
-            }
-            reportSuccess(_renderDurationMs);
-            return;
+            renderedSvg = svg;
+            renderDurationMs = Math.round(performance.now() - startedAt);
+            break;
           } catch (attemptErr) {
+            if (cancelled) return;
             lastError = attemptErr;
-            while (host.firstChild) {
-              host.removeChild(host.firstChild);
-            }
           }
         }
 
-        if (isMounted) {
-          const message =
-            (lastError as { message?: string } | null)?.message ||
-            (typeof lastError === "string" ? lastError : null) ||
-            "Failed to render diagram syntax.";
-          setError(message);
-          setSvgHtml("");
+        clearHost();
+
+        if (renderedSvg === null) {
+          fail(lastError, "Failed to render diagram syntax.");
+          return;
         }
-        reportError();
+
+        // sanitizeSvg throws on malformed output. The error is handled by the
+        // outer catch below, which shows it in the UI and records it once.
+        const sanitized = sanitizeSvg(renderedSvg);
+        if (!sanitized) {
+          throw new Error("Rendered diagram was empty after sanitization.");
+        }
+
+        setSvgHtml(sanitized);
+        setError(null);
+        reportSuccess(renderDurationMs);
       } catch (err) {
-        if (isMounted) {
-          const message =
-            (err as { message?: string } | null)?.message ||
-            "Unexpected error while rendering diagram.";
-          setError(message);
-          setSvgHtml("");
-        }
-        reportError();
+        if (cancelled) return;
+        fail(err, "Unexpected error while rendering diagram.");
       }
     }
 
-    renderDiagram();
+    const timerId = window.setTimeout(() => {
+      void renderDiagram();
+    }, RENDER_DEBOUNCE_MS);
 
     return () => {
-      isMounted = false;
+      cancelled = true;
+      window.clearTimeout(timerId);
     };
-  }, [normalizedSource, maxRetries, reactId, telemetry]);
+  }, [normalizedSource, maxRetries, reactId, telemetry, isDark]);
+
+  // Marks the component as mounted and cancels any pending feedback timer on
+  // unmount. isMountedRef is set to true again in the effect body so the guard
+  // stays correct when React StrictMode mounts, unmounts, and remounts.
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+        copyResetTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(normalizedSource);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copyTextToClipboard(normalizedSource).then((ok) => {
+      if (!isMountedRef.current) return;
+
+      if (!ok) {
+        console.warn("[PeldrunDiagram] Copy to clipboard failed.");
+        return;
+      }
+
+      setCopied(true);
+
+      // Restart the countdown on repeated clicks instead of stacking timers.
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
+        copyResetTimerRef.current = null;
+        setCopied(false);
+      }, 2000);
+    });
   };
 
   return (
