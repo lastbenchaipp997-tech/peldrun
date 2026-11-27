@@ -42,6 +42,7 @@ import {
   LayoutGrid,
   Lightbulb,
   LineChart,
+  Loader2,
   Map as MapIcon,
   MapPin,
   Package,
@@ -84,6 +85,16 @@ export interface CardRuntime {
   sendPrompt?: (prompt: string) => void;
   /** Allow `image.url` (https) supplied directly by the model. Default false. */
   allowRemoteImageUrls?: boolean;
+  /**
+   * True while the host still expects `image.ref` / `image.query` to be
+   * resolved for this message (the answer is streaming, or the backend is
+   * still building the image gallery). While true, cards that declare an
+   * image but have no URL yet render a loading placeholder instead of
+   * nothing. The host MUST set it back to false once the gallery has
+   * arrived or resolution has definitively failed; otherwise the
+   * placeholder never goes away. Default false.
+   */
+  imagesPending?: boolean;
 }
 
 export const CardRuntimeContext = createContext<CardRuntime>({});
@@ -140,6 +151,39 @@ function resolveImageSrc(
   }
   if (image.url && runtime.allowRemoteImageUrls) return image.url;
   return null;
+}
+
+/**
+ * Loading placeholder for card media. It fills its positioned parent
+ * (`absolute inset-0`), so it occupies exactly the footprint of the final
+ * <img> and nothing shifts when the picture arrives.
+ *
+ * Two layers kept as siblings: a pulsing block (skeleton) and a static
+ * centered spinner. Separate elements are required so the spinner does
+ * not inherit the opacity pulse. `motion-reduce` disables both animations
+ * for users who prefer reduced motion; the skeleton block alone still
+ * signals the loading state.
+ */
+function ImageLoader({ small = false }: { small?: boolean }): React.JSX.Element {
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        // bg-muted (no alpha) pulses between ~100% and ~50% opacity under
+        // animate-pulse, so it stays visible in light and dark themes.
+        className="absolute inset-0 animate-pulse bg-muted motion-reduce:animate-none"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 flex items-center justify-center"
+      >
+        <Loader2
+          size={small ? 14 : 22}
+          className="animate-spin text-muted-foreground/70 motion-reduce:animate-none"
+        />
+      </div>
+    </>
+  );
 }
 
 const GRID_COLS: Record<GridPayload["columns"], string> = {
@@ -294,21 +338,56 @@ const TAG_ACCENT_CLASSES: Record<CardAccent, string> = {
 
 function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
   const runtime = useContext(CardRuntimeContext);
-  const [imgFailed, setImgFailed] = useState(false);
-  const [imgLoaded, setImgLoaded] = useState(false);
 
-  const src = resolveImageSrc(card.image, runtime);
-  const showImage = Boolean(src) && !imgFailed;
+  // Derived loading state. We keep the *src that finished loading* and
+  // the *src that failed* instead of two booleans, because a boolean
+  // reset via useEffect races against the browser's microtask-scheduled
+  // `load` event on cached images (the effect lands after the load and
+  // clobbers it, leaving the skeleton spinning forever). Comparing the
+  // remembered src to the current one is race-free: when the image
+  // source changes, the flag flips back to "not loaded" automatically,
+  // and a stale `onLoad` from a previous src cannot mark the new one
+  // as loaded.
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
-  // Reset the loading/error flags whenever the resolved source changes
-  // so a new image always starts from the skeleton state.
-  useEffect(() => {
-    setImgLoaded(false);
-    setImgFailed(false);
-  }, [src]);
-  // Overlay needs a picture; without one it degrades to a plain vertical card.
+  // Memoize the resolver output so an unstable host implementation
+  // (e.g. one that appends a cache-buster or a signed token on every
+  // call) cannot retrigger a load on every render. `card.image` is
+  // stable because `parseUiPayload` is memoized upstream.
+  const src = useMemo(
+    () => resolveImageSrc(card.image, runtime),
+    [card.image, runtime],
+  );
+
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  const imgLoaded = src !== null && loadedSrc === src;
+  const imgFailed = src !== null && failedSrc === src;
+  const showImage = src !== null && !imgFailed;
+  // The card declares an image that the host has not resolved yet (backend
+  // still building the gallery). Reserve the media slot and show the loader
+  // so the layout does not jump when the URL arrives.
+  const imagePending =
+    src === null &&
+    runtime.imagesPending === true &&
+    Boolean(card.image?.ref || card.image?.query);
+  const showMedia = showImage || imagePending;
+  // Overlay needs a media slot; without one it degrades to a plain vertical card.
   const layout =
-    card.layout === "overlay" && !showImage ? "vertical" : card.layout;
+    card.layout === "overlay" && !showMedia ? "vertical" : card.layout;
+
+  // Safety net: if the image finished loading before React attached the
+  // `load` handler (cached image + hydration), onLoad never fires and the
+  // loader would spin forever. Detect that case after mount. Only the
+  // "loaded" outcome is inferred here; failures are left to onError because
+  // `complete` is unreliable for deferred lazy images in some browsers.
+  useEffect(() => {
+    const el = imgRef.current;
+    if (src !== null && el && el.complete && el.naturalWidth > 0) {
+      setLoadedSrc(src);
+    }
+  }, [src]);
 
   const overlay = layout === "overlay";
   const tile = layout === "tile";
@@ -346,7 +425,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
   );
 
   const imageNode =
-    showImage && !tile ? (
+    showMedia && !tile ? (
       // Wrapper owns the layout sizing (aspect ratio, side-rail width,
       // overlay positioning, compact square) so the skeleton occupies
       // exactly the same footprint as the final <img>. The image itself
@@ -355,34 +434,34 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
       <div
         aria-busy={!imgLoaded}
         className={join(
-          "relative overflow-hidden bg-muted/30",
+          "overflow-hidden bg-muted/30",
+          !overlay && "relative",
           layout === "vertical" && "aspect-video w-full",
           sideMedia && "w-28 shrink-0 self-stretch sm:w-36",
-          overlay && "absolute inset-0 h-full w-full",
+          overlay && "absolute inset-0 w-full",
           compact && "h-10 w-10 shrink-0 rounded-lg",
         )}
       >
-        {!imgLoaded && (
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 animate-pulse bg-gradient-to-br from-muted/80 via-muted/40 to-muted/80"
+        {!imgLoaded && <ImageLoader small={compact} />}
+        {src !== null && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            ref={imgRef}
+            src={src}
+            alt={card.image?.alt ?? card.title}
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            draggable={false}
+            onLoad={() => setLoadedSrc(src)}
+            onError={() => setFailedSrc(src)}
+            className={join(
+              "absolute inset-0 h-full w-full transition-opacity duration-200",
+              fitClass,
+              imgLoaded ? "opacity-100" : "opacity-0",
+            )}
           />
         )}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src as string}
-          alt={card.image?.alt ?? card.title}
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onLoad={() => setImgLoaded(true)}
-          onError={() => setImgFailed(true)}
-          className={join(
-            "absolute inset-0 h-full w-full transition-opacity duration-200",
-            fitClass,
-            imgLoaded ? "opacity-100" : "opacity-0",
-          )}
-        />
       </div>
     ) : null;
 
@@ -464,7 +543,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
         />
       )}
 
-      {compact && !showImage && iconNode && (
+      {compact && !showMedia && iconNode && (
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
           {iconNode}
         </div>
