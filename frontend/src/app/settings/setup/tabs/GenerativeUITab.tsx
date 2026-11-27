@@ -111,7 +111,7 @@ const FEATURE_META: readonly FeatureMeta[] = [
     description:
       "Flowcharts, sequence diagrams, Gantt charts, state diagrams, and more.",
     icon: <GitFork size={16} className="text-blue-500" />,
-    accent: "#3b82f6",
+    accent: "#04d004",
   },
   {
     key: "latex",
@@ -119,7 +119,7 @@ const FEATURE_META: readonly FeatureMeta[] = [
     description:
       "Inline and display math rendered through KaTeX. Supports standard LaTeX primitives.",
     icon: <Sigma size={16} className="text-purple-500" />,
-    accent: "#8b5cf6",
+    accent: "#04d004",
   },
   {
     key: "charts",
@@ -127,14 +127,14 @@ const FEATURE_META: readonly FeatureMeta[] = [
     description:
       "Recharts-backed bar, line, area, donut, and pie charts from JSON payloads.",
     icon: <BarChart3 size={16} className="text-emerald-500" />,
-    accent: "#10b981",
+    accent: "#04d004",
   },
   {
     key: "code_highlighting",
     title: "Code Highlighting",
     description: "Syntax highlighting for fenced code blocks via Prism.",
     icon: <Code2 size={16} className="text-amber-500" />,
-    accent: "#f59e0b",
+    accent: "#04d004",
   },
   {
     key: "cards",
@@ -142,7 +142,7 @@ const FEATURE_META: readonly FeatureMeta[] = [
     description:
       "Rich card layouts for places, options, products, and summaries. Renders ```ui fenced JSON blocks.",
     icon: <LayoutGrid size={16} className="text-indigo-500" />,
-    accent: "#6366f1",
+    accent: "#04d004",
   },
 ] as const;
 
@@ -276,13 +276,8 @@ export function GenerativeUITab(): React.JSX.Element {
   }, [telemetry.totalRenders, totalErrors]);
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-background text-foreground font-sans flex flex-col relative">
-      {/* Ambient Background */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full bg-primary/5 blur-3xl" />
-        <div className="absolute top-1/3 -right-40 w-[400px] h-[400px] rounded-full bg-purple-500/5 blur-3xl" />
-        <div className="absolute bottom-0 left-1/3 w-[450px] h-[450px] rounded-full bg-emerald-500/5 blur-3xl" />
-      </div>
+    <div className="h-full w-full overflow-y-auto bg-setbg text-foreground font-sans flex flex-col relative">
+
 
       {/* Header */}
       <motion.header
@@ -392,21 +387,21 @@ export function GenerativeUITab(): React.JSX.Element {
                     transition={{ duration: 0.4, delay: idx * 0.05 }}
                     whileHover={{ y: -4 }}
                     onClick={() => applyPresetById(preset.id)}
-                    className={`group relative p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2.5 overflow-hidden ${
+                    className={`group relative p-4 rounded-md border text-left transition-all cursor-pointer flex flex-col justify-between gap-2.5 overflow-hidden ${
                       isSelected
-                        ? "border-primary bg-primary/5 shadow-md"
+                        ? "border-emerald-500 bg-card shadow-md"
                         : "border-border/70 bg-card/40 hover:bg-card/70 hover:border-primary/40"
                     }`}
                   >
                     {isSelected && (
-                      <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent" />
+                      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-card to-transparent" />
                     )}
                     <div className="flex items-center justify-between w-full">
                       <span className="text-xs font-semibold text-foreground">
                         {preset.title}
                       </span>
                       {isSelected ? (
-                        <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
                       ) : (
                         <CircleDot className="h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-primary/60 shrink-0 transition-colors" />
                       )}
@@ -446,15 +441,15 @@ export function GenerativeUITab(): React.JSX.Element {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.4, delay: 0.15 + idx * 0.05 }}
                     whileHover={{ y: -2 }}
-                    className={`group relative flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all overflow-hidden ${
+                    className={`group relative flex items-start gap-3 p-4 rounded-md border cursor-pointer transition-all overflow-hidden ${
                       isChecked
-                        ? "border-primary/60 bg-primary/5 text-foreground shadow-sm"
-                        : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/40 hover:border-primary/30"
+                        ? "border-card bg-card text-foreground shadow-sm"
+                        : "border-border/60 bg-muted text-muted-foreground hover:bg-muted/40 hover:border-border"
                     }`}
                   >
                     {isChecked && (
                       <div
-                        className="absolute top-0 left-0 right-0 h-[2px] opacity-70"
+                        className="absolute top-0 left-0 right-0 h-[1px] opacity-70"
                         style={{
                           background: `linear-gradient(90deg, transparent 0%, ${meta.accent} 50%, transparent 100%)`,
                         }}
@@ -648,9 +643,9 @@ export function GenerativeUITab(): React.JSX.Element {
           <motion.div
             {...FADE_UP}
             transition={{ ...FADE_UP.transition, delay: 0.55 }}
-            className="p-5 rounded-xl border border-border bg-card shadow-sm space-y-4 relative overflow-hidden mb-6"
+            className="p-5 rounded-xl border border-card bg-card shadow-sm space-y-4 relative overflow-hidden mb-6"
           >
-            <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-500/60 to-transparent" />
+            <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-muted to-transparent" />
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
@@ -1136,7 +1131,7 @@ function LimitSlider({
       initial={{ opacity: 0, y: 15 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
-      className="p-4 rounded-xl border border-border/70 bg-card/40 space-y-3 hover:border-primary/30 transition-colors"
+      className="p-4 rounded-md border border-border/70 bg-card/60 hover:bg-card space-y-3 hover:border-muted transition-colors"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-foreground flex items-center gap-1.5 min-w-0">
@@ -1149,7 +1144,7 @@ function LimitSlider({
       </div>
 
       <div className="relative">
-        <div className="absolute inset-0 h-1.5 rounded-full bg-muted top-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="absolute inset-0 h-1.5 rounded-full bg-black/5 top-1/2 -translate-y-1/2 pointer-events-none" />
         <div
           className="absolute h-1.5 rounded-full top-1/2 -translate-y-1/2 pointer-events-none"
           style={{
@@ -1199,12 +1194,12 @@ function TelemetryCell({
   };
 
   return (
-    <div className="p-3 rounded-lg bg-background border border-border/60 text-center hover:border-primary/40 transition-colors">
+    <div className="flex flex-col justify-around p-3 rounded-lg bg-custom border border-border/60 text-center hover:border-primary/40 transition-colors">
       <div className="text-[10px] text-muted-foreground flex items-center justify-center gap-1 mb-1">
         {icon}
         <span>{label}</span>
       </div>
-      <div className={`text-base font-bold font-mono ${toneClasses[tone]}`}>
+      <div className={` font-bold font-mono text-2xl ${toneClasses[tone]}`}>
         {value}
       </div>
     </div>
