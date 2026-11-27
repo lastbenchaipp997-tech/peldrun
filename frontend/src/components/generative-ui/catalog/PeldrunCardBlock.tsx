@@ -55,6 +55,7 @@ import {
 } from "lucide-react";
 
 import { useGenerativeUIStore } from "../store";
+import { UiAlert, UiKpi } from "./UiBlocks";
 import {
   parseUiPayload,
   safeHttpsUrl,
@@ -169,77 +170,77 @@ const GRID_COLS: Record<GridPayload["columns"], string> = {
  */
 const ACCENT_CLASSES: Record<CardAccent, Record<CardAccentStyle, string>> = {
   blue: {
-    tinted:   "border-blue-200    bg-gradient-to-br from-blue-50    to-blue-70    dark:border-blue-800/60    dark:from-blue-950/40    dark:to-blue-900/20",
+    tinted:   "border-blue-200    bg-gradient-to-br from-blue-50    to-blue-100    dark:border-blue-800/60    dark:from-blue-950/40    dark:to-blue-900/20",
     outlined: "border-2 border-blue-300    bg-transparent dark:border-blue-700/70",
     minimal:  "border border-blue-200/70    bg-blue-50/40    dark:border-blue-800/40    dark:bg-blue-950/10",
   },
   sky: {
-    tinted:   "border-sky-200     bg-gradient-to-br from-sky-50     to-sky-70     dark:border-sky-800/60     dark:from-sky-950/40     dark:to-sky-900/20",
+    tinted:   "border-sky-200     bg-gradient-to-br from-sky-50     to-sky-100     dark:border-sky-800/60     dark:from-sky-950/40     dark:to-sky-900/20",
     outlined: "border-2 border-sky-300     bg-transparent dark:border-sky-700/70",
     minimal:  "border border-sky-200/70     bg-sky-50/40     dark:border-sky-800/40     dark:bg-sky-950/10",
   },
   cyan: {
-    tinted:   "border-cyan-200    bg-gradient-to-br from-cyan-50    to-cyan-70   dark:border-cyan-800/60    dark:from-cyan-950/40    dark:to-cyan-900/20",
+    tinted:   "border-cyan-200    bg-gradient-to-br from-cyan-50    to-cyan-100   dark:border-cyan-800/60    dark:from-cyan-950/40    dark:to-cyan-900/20",
     outlined: "border-2 border-cyan-300    bg-transparent dark:border-cyan-700/70",
     minimal:  "border border-cyan-200/70    bg-cyan-50/40    dark:border-cyan-800/40    dark:bg-cyan-950/10",
   },
   teal: {
-    tinted:   "border-teal-200    bg-gradient-to-br from-teal-50    to-teal-40    dark:border-teal-800/60    dark:from-teal-950/40    dark:to-teal-900/20",
+    tinted:   "border-teal-200    bg-gradient-to-br from-teal-50    to-teal-100    dark:border-teal-800/60    dark:from-teal-950/40    dark:to-teal-900/20",
     outlined: "border-2 border-teal-300    bg-transparent dark:border-teal-700/70",
     minimal:  "border border-teal-200/70    bg-teal-50/40    dark:border-teal-800/40    dark:bg-teal-950/10",
   },
   emerald: {
-    tinted:   "border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-70 dark:border-emerald-800/60 dark:from-emerald-950/40 dark:to-emerald-900/20",
+    tinted:   "border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-100 dark:border-emerald-800/60 dark:from-emerald-950/40 dark:to-emerald-900/20",
     outlined: "border-2 border-emerald-300 bg-transparent dark:border-emerald-700/70",
     minimal:  "border border-emerald-200/70 bg-emerald-50/40 dark:border-emerald-800/40 dark:bg-emerald-950/10",
   },
   green: {
-    tinted:   "border-green-200   bg-gradient-to-br from-green-50   to-green-70   dark:border-green-800/60   dark:from-green-950/40   dark:to-green-900/20",
+    tinted:   "border-green-200   bg-gradient-to-br from-green-50   to-green-100   dark:border-green-800/60   dark:from-green-950/40   dark:to-green-900/20",
     outlined: "border-2 border-green-300   bg-transparent dark:border-green-700/70",
     minimal:  "border border-green-200/70   bg-green-50/40   dark:border-green-800/40   dark:bg-green-950/10",
   },
   lime: {
-    tinted:   "border-lime-200    bg-gradient-to-br from-lime-50    to-lime-70    dark:border-lime-800/60    dark:from-lime-950/40    dark:to-lime-900/20",
+    tinted:   "border-lime-200    bg-gradient-to-br from-lime-50    to-lime-100    dark:border-lime-800/60    dark:from-lime-950/40    dark:to-lime-900/20",
     outlined: "border-2 border-lime-300    bg-transparent dark:border-lime-700/70",
     minimal:  "border border-lime-200/70    bg-lime-50/40    dark:border-lime-800/40    dark:bg-lime-950/10",
   },
   amber: {
-    tinted:   "border-amber-200   bg-gradient-to-br from-amber-50   to-amber-70   dark:border-amber-800/60   dark:from-amber-950/40   dark:to-amber-900/20",
+    tinted:   "border-amber-200   bg-gradient-to-br from-amber-50   to-amber-100   dark:border-amber-800/60   dark:from-amber-950/40   dark:to-amber-900/20",
     outlined: "border-2 border-amber-300   bg-transparent dark:border-amber-700/70",
     minimal:  "border border-amber-200/70   bg-amber-50/40   dark:border-amber-800/40   dark:bg-amber-950/10",
   },
   yellow: {
-    tinted:   "border-yellow-200  bg-gradient-to-br from-yellow-50  to-yellow-70  dark:border-yellow-800/60  dark:from-yellow-950/40  dark:to-yellow-900/20",
+    tinted:   "border-yellow-200  bg-gradient-to-br from-yellow-50  to-yellow-100  dark:border-yellow-800/60  dark:from-yellow-950/40  dark:to-yellow-900/20",
     outlined: "border-2 border-yellow-300  bg-transparent dark:border-yellow-700/70",
     minimal:  "border border-yellow-200/70  bg-yellow-50/40  dark:border-yellow-800/40  dark:bg-yellow-950/10",
   },
   orange: {
-    tinted:   "border-orange-200  bg-gradient-to-br from-orange-50  to-orange-70  dark:border-orange-800/60  dark:from-orange-950/40  dark:to-orange-900/20",
+    tinted:   "border-orange-200  bg-gradient-to-br from-orange-50  to-orange-100  dark:border-orange-800/60  dark:from-orange-950/40  dark:to-orange-900/20",
     outlined: "border-2 border-orange-300  bg-transparent dark:border-orange-700/70",
     minimal:  "border border-orange-200/70  bg-orange-50/40  dark:border-orange-800/40  dark:bg-orange-950/10",
   },
   red: {
-    tinted:   "border-red-200     bg-gradient-to-br from-red-50     to-red-70     dark:border-red-800/60     dark:from-red-950/40     dark:to-red-900/20",
+    tinted:   "border-red-200     bg-gradient-to-br from-red-50     to-red-100     dark:border-red-800/60     dark:from-red-950/40     dark:to-red-900/20",
     outlined: "border-2 border-red-300     bg-transparent dark:border-red-700/70",
     minimal:  "border border-red-200/70     bg-red-50/40     dark:border-red-800/40     dark:bg-red-950/10",
   },
   rose: {
-    tinted:   "border-rose-200    bg-gradient-to-br from-rose-50    to-rose-70    dark:border-rose-800/60    dark:from-rose-950/40    dark:to-rose-900/20",
+    tinted:   "border-rose-200    bg-gradient-to-br from-rose-50    to-rose-100    dark:border-rose-800/60    dark:from-rose-950/40    dark:to-rose-900/20",
     outlined: "border-2 border-rose-300    bg-transparent dark:border-rose-700/70",
     minimal:  "border border-rose-200/70    bg-rose-50/40    dark:border-rose-800/40    dark:bg-rose-950/10",
   },
   pink: {
-    tinted:   "border-pink-200    bg-gradient-to-br from-pink-50    to-pink-70    dark:border-pink-800/60    dark:from-pink-950/40    dark:to-pink-900/20",
+    tinted:   "border-pink-200    bg-gradient-to-br from-pink-50    to-pink-100    dark:border-pink-800/60    dark:from-pink-950/40    dark:to-pink-900/20",
     outlined: "border-2 border-pink-300    bg-transparent dark:border-pink-700/70",
     minimal:  "border border-pink-200/70    bg-pink-50/40    dark:border-pink-800/40    dark:bg-pink-950/10",
   },
   fuchsia: {
-    tinted:   "border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 to-fuchsia-70 dark:border-fuchsia-800/60 dark:from-fuchsia-950/40 dark:to-fuchsia-900/20",
+    tinted:   "border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 to-fuchsia-100 dark:border-fuchsia-800/60 dark:from-fuchsia-950/40 dark:to-fuchsia-900/20",
     outlined: "border-2 border-fuchsia-300 bg-transparent dark:border-fuchsia-700/70",
     minimal:  "border border-fuchsia-200/70 bg-fuchsia-50/40 dark:border-fuchsia-800/40 dark:bg-fuchsia-950/10",
   },
   purple: {
-    tinted:   "border-purple-200  bg-gradient-to-br from-purple-50  to-purple-70  dark:border-purple-800/60  dark:from-purple-950/40  dark:to-purple-900/20",
+    tinted:   "border-purple-200  bg-gradient-to-br from-purple-50  to-purple-100  dark:border-purple-800/60  dark:from-purple-950/40  dark:to-purple-900/20",
     outlined: "border-2 border-purple-300  bg-transparent dark:border-purple-700/70",
     minimal:  "border border-purple-200/70  bg-purple-50/40  dark:border-purple-800/40  dark:bg-purple-950/10",
   },
@@ -294,9 +295,17 @@ const TAG_ACCENT_CLASSES: Record<CardAccent, string> = {
 function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
   const runtime = useContext(CardRuntimeContext);
   const [imgFailed, setImgFailed] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(false);
 
   const src = resolveImageSrc(card.image, runtime);
   const showImage = Boolean(src) && !imgFailed;
+
+  // Reset the loading/error flags whenever the resolved source changes
+  // so a new image always starts from the skeleton state.
+  useEffect(() => {
+    setImgLoaded(false);
+    setImgFailed(false);
+  }, [src]);
   // Overlay needs a picture; without one it degrades to a plain vertical card.
   const layout =
     card.layout === "overlay" && !showImage ? "vertical" : card.layout;
@@ -338,22 +347,43 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
 
   const imageNode =
     showImage && !tile ? (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={src as string}
-        alt={card.image?.alt ?? card.title}
-        loading="lazy"
-        decoding="async"
-        referrerPolicy="no-referrer"
-        onError={() => setImgFailed(true)}
+      // Wrapper owns the layout sizing (aspect ratio, side-rail width,
+      // overlay positioning, compact square) so the skeleton occupies
+      // exactly the same footprint as the final <img>. The image itself
+      // is absolutely positioned inside so it always fills the wrapper
+      // regardless of flex-stretch quirks.
+      <div
+        aria-busy={!imgLoaded}
         className={join(
-          fitClass,
+          "relative overflow-hidden bg-muted/30",
           layout === "vertical" && "aspect-video w-full",
           sideMedia && "w-28 shrink-0 self-stretch sm:w-36",
           overlay && "absolute inset-0 h-full w-full",
           compact && "h-10 w-10 shrink-0 rounded-lg",
         )}
-      />
+      >
+        {!imgLoaded && (
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 animate-pulse bg-gradient-to-br from-muted/80 via-muted/40 to-muted/80"
+          />
+        )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src as string}
+          alt={card.image?.alt ?? card.title}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onLoad={() => setImgLoaded(true)}
+          onError={() => setImgFailed(true)}
+          className={join(
+            "absolute inset-0 h-full w-full transition-opacity duration-200",
+            fitClass,
+            imgLoaded ? "opacity-100" : "opacity-0",
+          )}
+        />
+      </div>
     ) : null;
 
   const iconNode = Icon ? (
@@ -850,6 +880,14 @@ export function PeldrunCardBlock({
         <UiCard card={payload} />
       </div>
     );
+  }
+
+  if (payload.type === "alert") {
+    return <UiAlert alert={payload} />;
+  }
+
+  if (payload.type === "kpi") {
+    return <UiKpi kpi={payload} />;
   }
 
   if (payload.type === "flow") {

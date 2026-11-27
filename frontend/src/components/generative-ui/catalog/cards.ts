@@ -7,6 +7,17 @@
 //   { "type": "card", "layout": "media-start", "title": "...", ... }
 //   { "type": "grid", "columns": 2, "items": [ <card>, <card> ] }
 
+import {
+  MAX_KPI_ITEMS,
+  normalizeAlert,
+  normalizeKpiItem,
+  type AlertPayload,
+  type KpiItem,
+  type KpiPayload,
+} from "./cardBlocks";
+
+export type { AlertPayload, KpiPayload } from "./cardBlocks";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -198,7 +209,9 @@ export type UiPayload =
   | CardPayload
   | GridPayload
   | FlowPayload
-  | FormPayload;
+  | FormPayload
+  | AlertPayload
+  | KpiPayload;
 
 export type UiParseResult =
   | { ok: true; payload: UiPayload }
@@ -596,6 +609,48 @@ export function parseUiPayload(
         questions,
         submitLabel: text(o.submitLabel, 40) || "Submit",
         submitPrompt: text(o.submitPrompt, 2000),
+      },
+    };
+  }
+
+  if (type === "alert") {
+    const alert = normalizeAlert(o);
+    return alert
+      ? { ok: true, payload: alert }
+      : {
+          ok: false,
+          reason: "Alert requires a `title`, `text`, or `items`.",
+          incomplete: false,
+        };
+  }
+
+  if (type === "kpi") {
+    const rawItems = Array.isArray(o.items) ? o.items : null;
+    if (!rawItems || rawItems.length === 0) {
+      return { ok: false, reason: "KPI requires a non-empty `items` array.", incomplete: false };
+    }
+    const valid = rawItems
+      .map(normalizeKpiItem)
+      .filter((k): k is KpiItem => k !== null);
+    if (valid.length === 0) {
+      return { ok: false, reason: "No KPI item has a valid `label` and `value`.", incomplete: false };
+    }
+    const limit = Math.min(MAX_KPI_ITEMS, Math.max(1, maxCards));
+    const items = valid.slice(0, limit);
+    const colsRaw = Math.round(Number(o.columns));
+    const columns = (
+      Number.isFinite(colsRaw)
+        ? Math.min(4, Math.max(1, colsRaw))
+        : Math.min(4, items.length)
+    ) as 1 | 2 | 3 | 4;
+    return {
+      ok: true,
+      payload: {
+        type: "kpi",
+        columns,
+        title: text(o.title, 80),
+        items,
+        hidden: Math.max(0, valid.length - limit),
       },
     };
   }

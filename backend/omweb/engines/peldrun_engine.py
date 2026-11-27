@@ -3028,29 +3028,67 @@ class PeldrunEngine(ExecutionEngine):
         # gallery that renders INSIDE the ChatDeliverable bubble. Persisted
         # to disk via job_manager.complete_job, so it survives a page
         # refresh — the frontend cannot reconstruct proxy URLs on its own.
-        if collected_proxied_images:
-            try:
-                import json as _json_mod
+        #
+        # [CARD-IMAGES] This now goes through the SAME helper chat mode
+        # uses (dispatcher/chat_media.append_image_gallery_block). Besides
+        # serializing ``collected_proxied_images`` it also:
+        #   * resolves the ``image.query`` strings the agent wrote inside
+        #     ```ui cards (when ``cards_auto_images`` is on) and records
+        #     them in ``query_map`` so the frontend can show the photos;
+        #   * sets ``used_in_cards`` so the plain gallery is hidden when
+        #     the cards already show the pictures.
+        # The old inline code only serialized the agent's own image_search
+        # results, so card images were never resolved in agent mode.
+        #
+        # Lazy import: the dispatcher package imports the engines, so a
+        # module-level import here would create a cycle. The helper never
+        # raises; the except below only guards the import itself and falls
+        # back to the previous inline behaviour.
+        try:
+            from omweb.agent_bridge_parts.dispatcher.chat_media import (
+                append_image_gallery_block as _append_image_gallery_block,
+            )
 
-                _gallery_payload = _json_mod.dumps(
-                    {
-                        "images": collected_proxied_images,
-                        "query": collected_images_query,
-                        "provider": collected_images_provider,
-                    },
-                    ensure_ascii=False,
-                )
-                result_text = (
-                    result_text
-                    + f"\n\n```image_gallery\n{_gallery_payload}\n```\n"
-                )
-            except Exception as _gal_err:
-                logger.debug(
-                    "[ENGINE PELDRUN] Failed to append image_gallery "
-                    "block for job %s: %s",
-                    job_id,
-                    _gal_err,
-                )
+            result_text = await _append_image_gallery_block(
+                result_text,
+                collected_proxied_images,
+                collected_images_query,
+                collected_images_provider,
+                job_id,
+                chat_id=chat_id,
+                project_id=project_id,
+                active_llm=active_llm,
+            )
+        except Exception as _gal_err:
+            logger.warning(
+                "[ENGINE PELDRUN] Shared gallery helper unavailable for "
+                "job %s (%s); using inline fallback.",
+                job_id,
+                _gal_err,
+            )
+            if collected_proxied_images:
+                try:
+                    import json as _json_mod
+
+                    _gallery_payload = _json_mod.dumps(
+                        {
+                            "images": collected_proxied_images,
+                            "query": collected_images_query,
+                            "provider": collected_images_provider,
+                        },
+                        ensure_ascii=False,
+                    )
+                    result_text = (
+                        result_text
+                        + f"\n\n```image_gallery\n{_gallery_payload}\n```\n"
+                    )
+                except Exception as _gal_err2:
+                    logger.debug(
+                        "[ENGINE PELDRUN] Failed to append image_gallery "
+                        "block for job %s: %s",
+                        job_id,
+                        _gal_err2,
+                    )
 
         print(
             f"[ENGINE PELDRUN] Job {job_id} completed successfully in step {step_count}. "
