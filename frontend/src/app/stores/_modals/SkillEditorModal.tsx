@@ -202,8 +202,8 @@ function ToolbarButton({
       aria-label={title}
       className={`p-1.5 rounded transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
         isActive
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:text-foreground hover:bg-muted"
+          ? "bg-primary/15 text-black"
+          : "text-black hover:text-foreground hover:bg-muted"
       }`}
     >
       {children}
@@ -364,7 +364,7 @@ function SkillEditorToolbarPlugin() {
   };
 
   return (
-    <div className="px-6 py-2 border-b border-border bg-muted/20 flex items-center gap-0.5 flex-wrap shrink-0">
+    <div className="sticky top-0 z-10 px-6 py-2 border-b border-border/50 shadow-sm bg-card text-black backdrop-blur-sm flex items-center gap-0.5 flex-wrap shrink-0">
       {/* Undo / Redo */}
       <ToolbarButton
         onClick={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
@@ -754,7 +754,7 @@ export function SkillEditorModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-1"
       role="dialog"
       aria-modal="true"
       aria-labelledby="skill-editor-title"
@@ -765,9 +765,9 @@ export function SkillEditorModal({
         }
       }}
     >
-      <div className="bg-card rounded-lg shadow-2xl w-full max-w-5xl h-[90vh] flex flex-col border border-border">
+      <div className="bg-card rounded-md shadow-2xl w-full max-w-7xl h-[97vh] flex flex-col border border-border">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0 bg-muted/30">
+        <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0 bg-custom">
           <div className="flex items-center gap-2 min-w-0">
             <div className="p-1 rounded-lg bg-primary/10 text-primary shrink-0 flex items-center justify-center">
               <SkillIcon skill={skill} size={22} />
@@ -811,7 +811,7 @@ export function SkillEditorModal({
 
         {/* Frontmatter info banner */}
         {preview && Object.keys(preview.frontmatter).length > 0 && (
-          <div className="px-6 py-3 border-b border-border bg-muted/10 shrink-0">
+          <div className="px-6 py-3 border-b border-border bg-muted shrink-0">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-1">
               <Lock size={11} />
               <span className="font-semibold uppercase tracking-wider">

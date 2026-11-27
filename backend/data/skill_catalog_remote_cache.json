@@ -1,9 +1,9 @@
 {
   "_cache_meta": {
     "schema_version": 1,
-    "fetched_at": 1795551911.9190774,
+    "fetched_at": 1795815614.3290606,
     "source_url": "https://peldrunai.github.io/peldrun-skill-catalog/catalog.json",
-    "item_count": 6
+    "item_count": 7
   },
   "_items": {
     "pdf_document": {
@@ -281,6 +281,51 @@
       "release_date": "2026-11-08",
       "deprecation_message": null,
       "install_warnings": [],
+      "installable": true,
+      "installability_reason": "Installable -- click to download and install."
+    },
+    "code_review": {
+      "id": "code_review",
+      "name": "Code Review",
+      "display_name": "Code Review",
+      "description": "Systematic code review with router-based sub-skill selection.",
+      "version": "2.0.3",
+      "download_url": "https://github.com/peldrun-skills/code_review/releases/download/code_review-v2.0.3/code_review-2.0.3.zip",
+      "checksum_sha256": "0a707fcfcc498194e395642c26a80ddaa528be6c8599e5f19293d354e8fff157",
+      "brand_color": "#8B5CF6",
+      "icon": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor'><path d='M9 12l2 2 4-4'/></svg>",
+      "icon_type": "svg",
+      "author": "PELDRUN Team",
+      "author_url": "https://peldrun.ai",
+      "homepage": "https://peldrun.ai/skills/code_review",
+      "developer": {
+        "name": "PELDRUN Team",
+        "url": "https://peldrun.ai",
+        "email": null,
+        "avatar_url": null,
+        "github_username": null,
+        "verified": false
+      },
+      "repository_url": "https://github.com/peldrun-skills/code_review",
+      "license": "MIT",
+      "docs_url": null,
+      "tags": [
+        "review",
+        "audit",
+        "security",
+        "quality",
+        "code",
+        "router"
+      ],
+      "has_sub_skills": true,
+      "sub_skills_count": 4,
+      "trust": "verified",
+      "stability": "stable",
+      "release_date": "2026-11-27",
+      "deprecation_message": null,
+      "install_warnings": [
+        "This skill uses Progressive Disclosure with sub-skills."
+      ],
       "installable": true,
       "installability_reason": "Installable -- click to download and install."
     }
