@@ -147,7 +147,7 @@ function KpiTile({ item }: { item: KpiItem }): React.JSX.Element {
   return (
     <div
       dir="auto"
-      className="flex min-w-0 flex-col gap-1 rounded-md border border-border/70 bg-muted/40 p-3.5 text-start"
+      className="flex min-w-0 flex-col gap-1 rounded-md border border-border/70 bg-gigbg p-3.5 text-start"
     >
       <div className="truncate text-xs text-muted-foreground">{item.label}</div>
 

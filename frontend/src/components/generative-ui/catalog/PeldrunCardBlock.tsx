@@ -57,6 +57,7 @@ import {
 
 import { useGenerativeUIStore } from "../store";
 import { UiAlert, UiKpi } from "./UiBlocks";
+import { useChatRunState } from "./ChatRunStateContext";
 import {
   parseUiPayload,
   safeHttpsUrl,
@@ -81,8 +82,14 @@ export interface CardRuntime {
   resolveImage?: (ref: string) => string | null | undefined;
   /** Maps a model-supplied `image.query` to a URL (backend-resolved). */
   resolveImageByQuery?: (query: string) => string | null | undefined;
-  /** Sends `prompt` as a new user message (used by card actions). */
-  sendPrompt?: (prompt: string) => void;
+  /**
+   * Sends `prompt` as a new user message (used by card actions).
+   * Returns `false` when the host rejected the send (for example a run is
+   * still active) so the caller can stay interactive and retry. Any other
+   * return value, including `undefined` from hosts that predate this
+   * contract, is treated as accepted.
+   */
+  sendPrompt?: (prompt: string) => boolean | void;
   /** Allow `image.url` (https) supplied directly by the model. Default false. */
   allowRemoteImageUrls?: boolean;
   /**
@@ -338,6 +345,9 @@ const TAG_ACCENT_CLASSES: Record<CardAccent, string> = {
 
 function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
   const runtime = useContext(CardRuntimeContext);
+  // `busy`: a run is active, prompt actions must not be offered.
+  // `live`: this card is in the turn still being produced.
+  const { busy, live } = useChatRunState();
 
   // Derived loading state. We keep the *src that finished loading* and
   // the *src that failed* instead of two booleans, because a boolean
@@ -368,9 +378,12 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
   // The card declares an image that the host has not resolved yet (backend
   // still building the gallery). Reserve the media slot and show the loader
   // so the layout does not jump when the URL arrives.
+  // An explicit host override wins; otherwise a card in the live turn is
+  // pending while the run is active (the gallery block arrives together
+  // with the final event).
   const imagePending =
     src === null &&
-    runtime.imagesPending === true &&
+    (runtime.imagesPending ?? live) &&
     Boolean(card.image?.ref || card.image?.query);
   const showMedia = showImage || imagePending;
   // Overlay needs a media slot; without one it degrades to a plain vertical card.
@@ -509,7 +522,9 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
               <button
                 key={i}
                 type="button"
-                className={cls}
+                className={join(cls, busy && "cursor-not-allowed opacity-50")}
+                disabled={busy}
+                title={busy ? "Available when the response finishes" : undefined}
                 onClick={() => runtime.sendPrompt?.(a.prompt as string)}
               >
                 {a.label}
@@ -719,8 +734,16 @@ function UiFlow({ flow }: { flow: FlowPayload }): React.JSX.Element {
  */
 function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
   const runtime = useContext(CardRuntimeContext);
+  // While a run is active the host rejects new sends (same rule that
+  // disables the composer), so the submit button must be disabled too.
+  const { busy, answered = false } = useChatRunState();
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
-  const [submitted, setSubmitted] = useState(false);
+  // `sentHere`: this mounted form instance sent its answers.
+  // `answered`: the thread says this archived turn already has a later
+  // turn. The instance is re-created when its turn is archived, so local
+  // state alone cannot remember a submit; the thread position can.
+  const [sentHere, setSentHere] = useState(false);
+  const submitted = sentHere || answered;
 
   const accentClasses = form.accent
     ? ACCENT_CLASSES[form.accent][form.style ?? "tinted"]
@@ -780,12 +803,20 @@ function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
   };
 
   const handleSubmit = () => {
-    if (!isValid || submitted || !runtime.sendPrompt) return;
-    setSubmitted(true);
-    runtime.sendPrompt(buildPrompt());
+    // `busy` mirrors the host's own guard. The button is already disabled
+    // while busy; this is a backstop for a click that races the status
+    // change.
+    if (!isValid || submitted || busy || !runtime.sendPrompt) return;
+    const accepted = runtime.sendPrompt(buildPrompt());
+    // Freeze the form only when the host actually took the prompt. A
+    // rejected send (`false`) leaves the answers editable so the user can
+    // retry instead of facing a "Submitted" label for a message that was
+    // never sent. `undefined` (legacy hosts) counts as accepted.
+    if (accepted !== false) setSentHere(true);
   };
 
-  const canSubmit = isValid && !submitted && Boolean(runtime.sendPrompt);
+  const canSubmit =
+    isValid && !submitted && !busy && Boolean(runtime.sendPrompt);
 
   return (
     <div
@@ -863,8 +894,14 @@ function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
       </div>
 
       <div className="flex items-center justify-between gap-2 pt-1">
-        <span className="text-[11px] text-muted-foreground">
-          {submitted ? "✓ Submitted" : ""}
+        <span className="text-[11px] text-muted-foreground" aria-live="polite">
+          {submitted
+            ? sentHere
+              ? "✓ Submitted"
+              : "✓ Answered"
+            : busy
+              ? "Waiting for the response to finish..."
+              : ""}
         </span>
         <button
           type="button"

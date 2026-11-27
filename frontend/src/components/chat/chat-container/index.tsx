@@ -1834,20 +1834,34 @@ export function ChatContainer({
   // before starting the new run, so the card the user clicked remains
   // visible in the transcript above the new exchange. This is the
   // intended UX.
+  //
+  // Return value (consumed by ```ui forms and card actions through
+  // `CardRuntimeContext.sendPrompt`):
+  //   true  -> the prompt was handed to handleStartTask
+  //   false -> rejected before dispatch (empty prompt, run active, or
+  //            another send still in flight)
+  // A rejected send must never look like a success to the caller;
+  // otherwise a form would freeze on "Submitted" for a message that
+  // never left.
   const handleSendPrompt = useCallback(
-    (prompt: string) => {
+    (prompt: string): boolean => {
       const text = (prompt || "").trim();
-      if (!text) return;
+      if (!text) return false;
       if (status === "running" || status === "cancelling") {
         showToast.error(
           "Busy",
           "Wait for the current response to finish before sending another message."
         );
-        return;
+        return false;
       }
+      // Another dispatch is still in flight (attachment upload, rapid
+      // double click). handleStartTask would throw for it, so report the
+      // rejection here instead of claiming success.
+      if (sendLockRef.current) return false;
       handleStartTask(text).catch((err: any) => {
         console.error("[ChatContainer] Card action failed:", err);
       });
+      return true;
     },
     [status, handleStartTask],
   );

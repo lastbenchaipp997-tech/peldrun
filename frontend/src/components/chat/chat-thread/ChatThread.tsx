@@ -18,7 +18,7 @@
  * presentational shell that delegates to focused sub-components.
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { ArrowDown } from "lucide-react";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { useProviderBadge } from "@/lib/providerBadge";
@@ -37,6 +37,10 @@ import type { ChatThreadProps } from "./types";
 
 import { ChatOperationCard } from "@/features/source-control/components/ChatOperationCard";
 import { extractOperationFromSteps, filterApprovalSteps } from "./utils";
+import {
+  ChatRunStateContext,
+  type ChatRunState,
+} from "@/components/generative-ui/catalog/ChatRunStateContext";
 
 /**
  * Groups visible step events by their numeric step index.
@@ -215,7 +219,32 @@ export function ChatThread({
       .filter(([_, steps]) => (steps as StepEvent[]).length > 0)
   );
 
+  // Run state shared with interactive cards (see ChatRunStateContext).
+  //   busy: a run is active, so the host rejects new sends. Applies to
+  //         every card in the thread, archived or current.
+  //   live: only the CURRENT turn can still be producing content (streamed
+  //         text, backend image gallery). Archived turns are complete.
+  // Both values are memoized so card consumers re-render only when the
+  // run state actually changes, not on every streamed token.
+  const isBusy = status === "running" || status === "cancelling";
+  const isLive = status === "running";
+  const archivedRunState = useMemo<ChatRunState>(
+    () => ({ busy: isBusy, live: false }),
+    [isBusy],
+  );
+  const liveRunState = useMemo<ChatRunState>(
+    () => ({ busy: isBusy, live: isLive }),
+    [isBusy, isLive],
+  );
+  // Archived turn that has a later turn after it: its forms were already
+  // answered (or superseded by a typed message) and must stay locked.
+  const answeredRunState = useMemo<ChatRunState>(
+    () => ({ busy: isBusy, live: false, answered: true }),
+    [isBusy],
+  );
+
   return (
+    <ChatRunStateContext.Provider value={archivedRunState}>
     <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollRef}
@@ -240,6 +269,17 @@ export function ChatThread({
           // safe disambiguator. `turn.jobId` remains the semantic id
           // used by regeneration.
           <div key={`${turn.id || "turn"}-${tIdx}`}>
+            <ChatRunStateContext.Provider
+              value={
+                // Every archived turn is followed by the current turn
+                // (hydration keeps only flushed turns in `historyTurns`),
+                // unless no current turn exists yet, in which case only the
+                // last archived turn is still the latest message.
+                tIdx < historyTurns.length - 1 || Boolean(submittedPrompt)
+                  ? answeredRunState
+                  : archivedRunState
+              }
+            >
             <HistoricalTurn
               turn={turn}
               tIdx={tIdx}
@@ -258,6 +298,7 @@ export function ChatThread({
               // card actions on historical turns remain functional.
               onSendPrompt={onSendPrompt}
             />
+            </ChatRunStateContext.Provider>
           </div>
         ))}
 
@@ -371,6 +412,7 @@ export function ChatThread({
 
         {/* Deliverable for Completed / Current Turn */}
         {finalResult && (
+          <ChatRunStateContext.Provider value={liveRunState}>
           <ChatDeliverable
             chatId={chatId}
             finalResult={finalResult}
@@ -400,6 +442,7 @@ export function ChatThread({
             // current turn's deliverable.
             onSendPrompt={onSendPrompt}
           />
+          </ChatRunStateContext.Provider>
         )}
 
         {/* Live Running Indicator — pinned to the bottom of the active thread.
@@ -428,6 +471,7 @@ export function ChatThread({
         </button>
       )}
     </div>
+    </ChatRunStateContext.Provider>
   );
 }
 
