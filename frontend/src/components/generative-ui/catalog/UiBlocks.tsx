@@ -66,7 +66,7 @@ export function UiAlert({ alert }: { alert: AlertPayload }): React.JSX.Element {
     <div
       dir="auto"
       role={alert.tone === "warning" || alert.tone === "error" ? "alert" : "status"}
-      className={join("my-3 flex gap-2.5 rounded-xl border p-3.5 text-start", s.box)}
+      className={join("my-3 flex gap-2.5 rounded-md border p-3.5 text-start", s.box)}
     >
       <Icon size={18} aria-hidden="true" className={join("mt-0.5 shrink-0", s.icon)} />
       <div className="min-w-0 space-y-1">
@@ -147,7 +147,7 @@ function KpiTile({ item }: { item: KpiItem }): React.JSX.Element {
   return (
     <div
       dir="auto"
-      className="flex min-w-0 flex-col gap-1 rounded-xl border border-border/70 bg-muted/40 p-3.5 text-start"
+      className="flex min-w-0 flex-col gap-1 rounded-md border border-border/70 bg-muted/40 p-3.5 text-start"
     >
       <div className="truncate text-xs text-muted-foreground">{item.label}</div>
 

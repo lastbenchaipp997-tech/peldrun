@@ -198,7 +198,7 @@ const GRID_COLS: Record<GridPayload["columns"], string> = {
  * spelled out as a full Tailwind class string — no dynamic construction
  * — so the JIT compiler sees the classes in the source and ships them.
  *
- * Light: `from-<c>-50 to-<c>-100` diagonal + `<c>-200` border.
+ * Light: `from-<c>-50 to-<c>-100/40` diagonal + `<c>-200` border.
  * Dark : `from-<c>-950/40 to-<c>-900/20` + `<c>-800/60` border.
  *        The alpha keeps the tint legible on a dark card without
  *        washing out the text.
@@ -214,92 +214,92 @@ const GRID_COLS: Record<GridPayload["columns"], string> = {
  */
 const ACCENT_CLASSES: Record<CardAccent, Record<CardAccentStyle, string>> = {
   blue: {
-    tinted:   "border-blue-200    bg-gradient-to-br from-blue-50    to-blue-100    dark:border-blue-800/60    dark:from-blue-950/40    dark:to-blue-900/20",
+    tinted:   "border-blue-200    bg-gradient-to-br from-blue-50/30    to-blue-100/40     dark:border-blue-800/60    dark:from-blue-950/40    dark:to-blue-900/20",
     outlined: "border-2 border-blue-300    bg-transparent dark:border-blue-700/70",
     minimal:  "border border-blue-200/70    bg-blue-50/40    dark:border-blue-800/40    dark:bg-blue-950/10",
   },
   sky: {
-    tinted:   "border-sky-200     bg-gradient-to-br from-sky-50     to-sky-100     dark:border-sky-800/60     dark:from-sky-950/40     dark:to-sky-900/20",
+    tinted:   "border-sky-200     bg-gradient-to-br from-sky-50/30     to-sky-100/40     dark:border-sky-800/60     dark:from-sky-950/40     dark:to-sky-900/20",
     outlined: "border-2 border-sky-300     bg-transparent dark:border-sky-700/70",
     minimal:  "border border-sky-200/70     bg-sky-50/40     dark:border-sky-800/40     dark:bg-sky-950/10",
   },
   cyan: {
-    tinted:   "border-cyan-200    bg-gradient-to-br from-cyan-50    to-cyan-100   dark:border-cyan-800/60    dark:from-cyan-950/40    dark:to-cyan-900/20",
+    tinted:   "border-cyan-200    bg-gradient-to-br from-cyan-50/30    to-cyan-100/40   dark:border-cyan-800/60    dark:from-cyan-950/40    dark:to-cyan-900/20",
     outlined: "border-2 border-cyan-300    bg-transparent dark:border-cyan-700/70",
     minimal:  "border border-cyan-200/70    bg-cyan-50/40    dark:border-cyan-800/40    dark:bg-cyan-950/10",
   },
   teal: {
-    tinted:   "border-teal-200    bg-gradient-to-br from-teal-50    to-teal-100    dark:border-teal-800/60    dark:from-teal-950/40    dark:to-teal-900/20",
+    tinted:   "border-teal-200    bg-gradient-to-br from-teal-50/30    to-teal-100/40    dark:border-teal-800/60    dark:from-teal-950/40    dark:to-teal-900/20",
     outlined: "border-2 border-teal-300    bg-transparent dark:border-teal-700/70",
     minimal:  "border border-teal-200/70    bg-teal-50/40    dark:border-teal-800/40    dark:bg-teal-950/10",
   },
   emerald: {
-    tinted:   "border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-100 dark:border-emerald-800/60 dark:from-emerald-950/40 dark:to-emerald-900/20",
+    tinted:   "border-emerald-200 bg-gradient-to-br from-emerald-50/30 to-emerald-100/40 dark:border-emerald-800/60 dark:from-emerald-950/40 dark:to-emerald-900/20",
     outlined: "border-2 border-emerald-300 bg-transparent dark:border-emerald-700/70",
     minimal:  "border border-emerald-200/70 bg-emerald-50/40 dark:border-emerald-800/40 dark:bg-emerald-950/10",
   },
   green: {
-    tinted:   "border-green-200   bg-gradient-to-br from-green-50   to-green-100   dark:border-green-800/60   dark:from-green-950/40   dark:to-green-900/20",
+    tinted:   "border-green-200   bg-gradient-to-br from-green-50/30   to-green-100/40   dark:border-green-800/60   dark:from-green-950/40   dark:to-green-900/20",
     outlined: "border-2 border-green-300   bg-transparent dark:border-green-700/70",
     minimal:  "border border-green-200/70   bg-green-50/40   dark:border-green-800/40   dark:bg-green-950/10",
   },
   lime: {
-    tinted:   "border-lime-200    bg-gradient-to-br from-lime-50    to-lime-100    dark:border-lime-800/60    dark:from-lime-950/40    dark:to-lime-900/20",
+    tinted:   "border-lime-200    bg-gradient-to-br from-lime-50/30    to-lime-100/40    dark:border-lime-800/60    dark:from-lime-950/40    dark:to-lime-900/20",
     outlined: "border-2 border-lime-300    bg-transparent dark:border-lime-700/70",
     minimal:  "border border-lime-200/70    bg-lime-50/40    dark:border-lime-800/40    dark:bg-lime-950/10",
   },
   amber: {
-    tinted:   "border-amber-200   bg-gradient-to-br from-amber-50   to-amber-100   dark:border-amber-800/60   dark:from-amber-950/40   dark:to-amber-900/20",
+    tinted:   "border-amber-200   bg-gradient-to-br from-amber-50/30   to-amber-100/40   dark:border-amber-800/60   dark:from-amber-950/40   dark:to-amber-900/20",
     outlined: "border-2 border-amber-300   bg-transparent dark:border-amber-700/70",
     minimal:  "border border-amber-200/70   bg-amber-50/40   dark:border-amber-800/40   dark:bg-amber-950/10",
   },
   yellow: {
-    tinted:   "border-yellow-200  bg-gradient-to-br from-yellow-50  to-yellow-100  dark:border-yellow-800/60  dark:from-yellow-950/40  dark:to-yellow-900/20",
+    tinted:   "border-yellow-200  bg-gradient-to-br from-yellow-50/30  to-yellow-100/40  dark:border-yellow-800/60  dark:from-yellow-950/40  dark:to-yellow-900/20",
     outlined: "border-2 border-yellow-300  bg-transparent dark:border-yellow-700/70",
     minimal:  "border border-yellow-200/70  bg-yellow-50/40  dark:border-yellow-800/40  dark:bg-yellow-950/10",
   },
   orange: {
-    tinted:   "border-orange-200  bg-gradient-to-br from-orange-50  to-orange-100  dark:border-orange-800/60  dark:from-orange-950/40  dark:to-orange-900/20",
+    tinted:   "border-orange-200  bg-gradient-to-br from-orange-50  to-orange-100/40  dark:border-orange-800/60  dark:from-orange-950/40  dark:to-orange-900/20",
     outlined: "border-2 border-orange-300  bg-transparent dark:border-orange-700/70",
     minimal:  "border border-orange-200/70  bg-orange-50/40  dark:border-orange-800/40  dark:bg-orange-950/10",
   },
   red: {
-    tinted:   "border-red-200     bg-gradient-to-br from-red-50     to-red-100     dark:border-red-800/60     dark:from-red-950/40     dark:to-red-900/20",
+    tinted:   "border-red-200     bg-gradient-to-br from-red-50     to-red-100/40     dark:border-red-800/60     dark:from-red-950/40     dark:to-red-900/20",
     outlined: "border-2 border-red-300     bg-transparent dark:border-red-700/70",
     minimal:  "border border-red-200/70     bg-red-50/40     dark:border-red-800/40     dark:bg-red-950/10",
   },
   rose: {
-    tinted:   "border-rose-200    bg-gradient-to-br from-rose-50    to-rose-100    dark:border-rose-800/60    dark:from-rose-950/40    dark:to-rose-900/20",
+    tinted:   "border-rose-200    bg-gradient-to-br from-rose-50    to-rose-100/40    dark:border-rose-800/60    dark:from-rose-950/40    dark:to-rose-900/20",
     outlined: "border-2 border-rose-300    bg-transparent dark:border-rose-700/70",
     minimal:  "border border-rose-200/70    bg-rose-50/40    dark:border-rose-800/40    dark:bg-rose-950/10",
   },
   pink: {
-    tinted:   "border-pink-200    bg-gradient-to-br from-pink-50    to-pink-100    dark:border-pink-800/60    dark:from-pink-950/40    dark:to-pink-900/20",
+    tinted:   "border-pink-200    bg-gradient-to-br from-pink-50    to-pink-100/40    dark:border-pink-800/60    dark:from-pink-950/40    dark:to-pink-900/20",
     outlined: "border-2 border-pink-300    bg-transparent dark:border-pink-700/70",
     minimal:  "border border-pink-200/70    bg-pink-50/40    dark:border-pink-800/40    dark:bg-pink-950/10",
   },
   fuchsia: {
-    tinted:   "border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 to-fuchsia-100 dark:border-fuchsia-800/60 dark:from-fuchsia-950/40 dark:to-fuchsia-900/20",
+    tinted:   "border-fuchsia-200 bg-gradient-to-br from-fuchsia-50 to-fuchsia-100/40 dark:border-fuchsia-800/60 dark:from-fuchsia-950/40 dark:to-fuchsia-900/20",
     outlined: "border-2 border-fuchsia-300 bg-transparent dark:border-fuchsia-700/70",
     minimal:  "border border-fuchsia-200/70 bg-fuchsia-50/40 dark:border-fuchsia-800/40 dark:bg-fuchsia-950/10",
   },
   purple: {
-    tinted:   "border-purple-200  bg-gradient-to-br from-purple-50  to-purple-100  dark:border-purple-800/60  dark:from-purple-950/40  dark:to-purple-900/20",
+    tinted:   "border-purple-200  bg-gradient-to-br from-purple-50  to-purple-100/40  dark:border-purple-800/60  dark:from-purple-950/40  dark:to-purple-900/20",
     outlined: "border-2 border-purple-300  bg-transparent dark:border-purple-700/70",
     minimal:  "border border-purple-200/70  bg-purple-50/40  dark:border-purple-800/40  dark:bg-purple-950/10",
   },
   violet: {
-    tinted:   "border-violet-200  bg-gradient-to-br from-violet-50  to-violet-100  dark:border-violet-800/60  dark:from-violet-950/40  dark:to-violet-900/20",
+    tinted:   "border-violet-200  bg-gradient-to-br from-violet-50  to-violet-100/40  dark:border-violet-800/60  dark:from-violet-950/40  dark:to-violet-900/20",
     outlined: "border-2 border-violet-300  bg-transparent dark:border-violet-700/70",
     minimal:  "border border-violet-200/70  bg-violet-50/40  dark:border-violet-800/40  dark:bg-violet-950/10",
   },
   indigo: {
-    tinted:   "border-indigo-200  bg-gradient-to-br from-indigo-50  to-indigo-100  dark:border-indigo-800/60  dark:from-indigo-950/40  dark:to-indigo-900/20",
+    tinted:   "border-indigo-200  bg-gradient-to-br from-indigo-50  to-indigo-100/40  dark:border-indigo-800/60  dark:from-indigo-950/40  dark:to-indigo-900/20",
     outlined: "border-2 border-indigo-300  bg-transparent dark:border-indigo-700/70",
     minimal:  "border border-indigo-200/70  bg-indigo-50/40  dark:border-indigo-800/40  dark:bg-indigo-950/10",
   },
   slate: {
-    tinted:   "border-slate-200   bg-gradient-to-br from-slate-50   to-slate-100   dark:border-slate-700/60   dark:from-slate-900/60   dark:to-slate-900/40",
+    tinted:   "border-slate-200   bg-gradient-to-br from-slate-50   to-slate-100/40   dark:border-slate-700/60   dark:from-slate-900/60   dark:to-slate-900/40",
     outlined: "border-2 border-slate-300   bg-transparent dark:border-slate-600/70",
     minimal:  "border border-slate-200/70   bg-slate-50/40   dark:border-slate-700/40   dark:bg-slate-900/20",
   },
@@ -312,24 +312,24 @@ const ACCENT_CLASSES: Record<CardAccent, Record<CardAccentStyle, string>> = {
  * the card body.
  */
 const TAG_ACCENT_CLASSES: Record<CardAccent, string> = {
-  blue:    "bg-blue-100    text-blue-700    dark:bg-blue-900/40    dark:text-blue-300",
-  sky:     "bg-sky-100     text-sky-700     dark:bg-sky-900/40     dark:text-sky-300",
-  cyan:    "bg-cyan-100    text-cyan-700    dark:bg-cyan-900/40    dark:text-cyan-300",
-  teal:    "bg-teal-100    text-teal-700    dark:bg-teal-900/40    dark:text-teal-300",
-  emerald: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-  green:   "bg-green-100   text-green-700   dark:bg-green-900/40   dark:text-green-300",
-  lime:    "bg-lime-100    text-lime-700    dark:bg-lime-900/40    dark:text-lime-300",
-  amber:   "bg-amber-100   text-amber-700   dark:bg-amber-900/40   dark:text-amber-300",
-  yellow:  "bg-yellow-100  text-yellow-700  dark:bg-yellow-900/40  dark:text-yellow-300",
-  orange:  "bg-orange-100  text-orange-700  dark:bg-orange-900/40  dark:text-orange-300",
-  red:     "bg-red-100     text-red-700     dark:bg-red-900/40     dark:text-red-300",
-  rose:    "bg-rose-100    text-rose-700    dark:bg-rose-900/40    dark:text-rose-300",
-  pink:    "bg-pink-100    text-pink-700    dark:bg-pink-900/40    dark:text-pink-300",
-  fuchsia: "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300",
-  purple:  "bg-purple-100  text-purple-700  dark:bg-purple-900/40  dark:text-purple-300",
-  violet:  "bg-violet-100  text-violet-700  dark:bg-violet-900/40  dark:text-violet-300",
-  indigo:  "bg-indigo-100  text-indigo-700  dark:bg-indigo-900/40  dark:text-indigo-300",
-  slate:   "bg-slate-100   text-slate-700   dark:bg-slate-800/60   dark:text-slate-300",
+  blue:    "bg-blue-100/40    text-blue-700    dark:bg-blue-900/40    dark:text-blue-300",
+  sky:     "bg-sky-100/40     text-sky-700     dark:bg-sky-900/40     dark:text-sky-300",
+  cyan:    "bg-cyan-100/40    text-cyan-700    dark:bg-cyan-900/40    dark:text-cyan-300",
+  teal:    "bg-teal-100/40    text-teal-700    dark:bg-teal-900/40    dark:text-teal-300",
+  emerald: "bg-emerald-100/40 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+  green:   "bg-green-100/40   text-green-700   dark:bg-green-900/40   dark:text-green-300",
+  lime:    "bg-lime-100/40    text-lime-700    dark:bg-lime-900/40    dark:text-lime-300",
+  amber:   "bg-amber-100/40   text-amber-700   dark:bg-amber-900/40   dark:text-amber-300",
+  yellow:  "bg-yellow-100/40  text-yellow-700  dark:bg-yellow-900/40  dark:text-yellow-300",
+  orange:  "bg-orange-100/40  text-orange-700  dark:bg-orange-900/40  dark:text-orange-300",
+  red:     "bg-red-100/40     text-red-700     dark:bg-red-900/40     dark:text-red-300",
+  rose:    "bg-rose-100/40    text-rose-700    dark:bg-rose-900/40    dark:text-rose-300",
+  pink:    "bg-pink-100/40    text-pink-700    dark:bg-pink-900/40    dark:text-pink-300",
+  fuchsia: "bg-fuchsia-100/40 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300",
+  purple:  "bg-purple-100/40  text-purple-700  dark:bg-purple-900/40  dark:text-purple-300",
+  violet:  "bg-violet-100/40  text-violet-700  dark:bg-violet-900/40  dark:text-violet-300",
+  indigo:  "bg-indigo-100/40  text-indigo-700  dark:bg-indigo-900/40  dark:text-indigo-300",
+  slate:   "bg-slate-100/40   text-slate-700   dark:bg-slate-800/60   dark:text-slate-300",
 };
 
 // ---------------------------------------------------------------------------
@@ -439,7 +439,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
           layout === "vertical" && "aspect-video w-full",
           sideMedia && "w-28 shrink-0 self-stretch sm:w-36",
           overlay && "absolute inset-0 w-full",
-          compact && "h-10 w-10 shrink-0 rounded-lg",
+          compact && "h-10 w-10 shrink-0 rounded-md",
         )}
       >
         {!imgLoaded && <ImageLoader small={compact} />}
@@ -458,7 +458,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
             className={join(
               "absolute inset-0 h-full w-full transition-opacity duration-200",
               fitClass,
-              imgLoaded ? "opacity-100" : "opacity-0",
+              imgLoaded ? "opacity-100/40" : "opacity-0",
             )}
           />
         )}
@@ -495,7 +495,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
             "rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors",
             overlay
               ? "border-white/40 text-white hover:bg-white/15"
-              : "border-border bg-black text-card hover:bg-muted hover:text-black",
+              : "border-border bg-card text-black hover:bg-black hover:text-card",
           );
           if (a.href && !a.prompt) {
             return (
@@ -544,7 +544,7 @@ function UiCard({ card }: { card: CardPayload }): React.JSX.Element {
       )}
 
       {compact && !showMedia && iconNode && (
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted/60">
           {iconNode}
         </div>
       )}
@@ -790,7 +790,7 @@ function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
   return (
     <div
       dir="auto"
-      className={join("my-3 rounded-xl border p-4 space-y-4", accentClasses)}
+      className={join("my-3 rounded-md border p-4 space-y-4", accentClasses)}
     >
       {(form.title || form.description) && (
         <div className="space-y-1">
@@ -837,10 +837,10 @@ function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
                     <label
                       key={opt.id}
                       className={join(
-                        "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs cursor-pointer transition-colors",
+                        "flex items-center gap-2 rounded-md border px-3 py-2 text-xs cursor-pointer transition-colors",
                         isSelected
-                          ? "border-primary/60 bg-primary/10 text-foreground"
-                          : "border-border/60 bg-background/60 text-foreground/80 hover:bg-muted/40",
+                          ? "border-border bg-primary/10 text-foreground"
+                          : "border-border bg-card/80 text-foreground hover:bg-muted/40",
                         submitted && "cursor-not-allowed opacity-70",
                       )}
                     >
@@ -871,7 +871,7 @@ function UiForm({ form }: { form: FormPayload }): React.JSX.Element {
           onClick={handleSubmit}
           disabled={!canSubmit}
           className={join(
-            "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+            "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
             canSubmit
               ? "bg-primary text-primary-foreground hover:bg-primary/90"
               : "bg-muted text-muted-foreground cursor-not-allowed",
