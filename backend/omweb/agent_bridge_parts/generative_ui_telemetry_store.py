@@ -52,6 +52,10 @@ EMPTY_TELEMETRY: Dict[str, Any] = {
     "mermaidErrors": 0,
     "chartErrors": 0,
     "latexErrors": 0,
+    # New in v3: errors emitted by PeldrunCardBlock (invalid JSON, unknown
+    # layout, missing required fields, etc.). Kept here so the counter
+    # survives reloads and is included in settings sync.
+    "cardErrors": 0,
     "lastRenderLatencyMs": 0,
 }
 

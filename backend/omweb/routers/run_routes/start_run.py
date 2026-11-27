@@ -789,6 +789,31 @@ async def start_run(req: RunRequest, background_tasks: BackgroundTasks):
         turns = list(existing_chat.get("turns", []))
         prev_jid = existing_chat.get("job_id", "")
 
+        # v4.1 FIX: ``existing_chat["job_id"]`` can equal ``chat_id`` in
+        # two scenarios:
+        #   1. The session was opened via ``/chat/{chat_id}`` (a legacy
+        #      URL shape) and the frontend hydrated ``activeJobId`` from
+        #      the chat id instead of a genuine ``job_xxx``.
+        #   2. A previous run wrote ``chat_id`` into the top-level
+        #      ``job_id`` field before the per-turn archival bug was
+        #      closed (self-heals once this fix lands).
+        #
+        # Archiving a turn with ``job_id = chat_id`` produces duplicate
+        # values across turns — the frontend then renders React list
+        # keys that collide ("two children with the same key"). We
+        # collapse that value to ``""`` here so ``turns[].job_id`` is
+        # EITHER a genuine ``job_xxx`` OR empty (the frontend falls
+        # back to ``turn-${idx}`` for empty).
+        #
+        # ``prev_jid`` (unsanitized) is still used below for the
+        # duplicate-append guard — that guard compares against
+        # ``turns[-1].job_id`` which, after this fix, is either a
+        # clean ``job_xxx`` or ``""``. Sanitizing the guard input would
+        # re-append the same turn on retries.
+        _turn_job_id = (
+            prev_jid if (prev_jid and prev_jid != chat_id) else ""
+        )
+
         # Project the current turn's multimodal attachments into the
         # historical ``attachedFiles`` shape so they survive archival
         # into ``turns[]``. Applied identically in both branches below
@@ -823,12 +848,13 @@ async def start_run(req: RunRequest, background_tasks: BackgroundTasks):
                     prev_r = existing_chat.get("result", "")
                     prev_ev = existing_chat.get("events", [])
                     if prev_p and (prev_r or prev_ev):
-                        if not turns or turns[-1].get("job_id") != prev_jid:
+                        if not turns or turns[-1].get("job_id") != _turn_job_id:
                             _ext_provider, _ext_model = (
                                 _extract_provider_model_from_events(existing_chat)
                             )
                             turns.append({
-                                "job_id": prev_jid,
+                                # v4.1 FIX: use sanitized id (see above).
+                                "job_id": _turn_job_id,
                                 "prompt": prev_p,
                                 "result": prev_r,
                                 "events": prev_ev,
@@ -854,12 +880,13 @@ async def start_run(req: RunRequest, background_tasks: BackgroundTasks):
             prev_r = existing_chat.get("result", "")
             prev_ev = existing_chat.get("events", [])
             if prev_p and (prev_r or prev_ev):
-                if not turns or turns[-1].get("job_id") != prev_jid:
+                if not turns or turns[-1].get("job_id") != _turn_job_id:
                     _ext_provider, _ext_model = (
                         _extract_provider_model_from_events(existing_chat)
                     )
                     turns.append({
-                        "job_id": prev_jid,
+                        # v4.1 FIX: use sanitized id (see above).
+                        "job_id": _turn_job_id,
                         "prompt": prev_p,
                         "result": prev_r,
                         "events": prev_ev,

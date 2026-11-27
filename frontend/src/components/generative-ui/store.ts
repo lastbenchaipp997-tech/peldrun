@@ -72,7 +72,10 @@ interface RenderingState extends RenderingSettings {
   // ---- Telemetry actions ----------------------------------------------
 
   recordSuccess: (latencyMs: number) => void;
-  recordError: (format: "mermaid" | "chart" | "latex") => void;
+  // v3: `"card"` is a new error channel. `PeldrunCardBlock` calls this
+  // when it cannot parse the ```ui payload, when the payload has an
+  // unknown layout, or when a required field is missing.
+  recordError: (format: "mermaid" | "chart" | "latex" | "card") => void;
   resetTelemetry: () => void;
 }
 
@@ -214,6 +217,12 @@ export const useGenerativeUIStore = create<RenderingState>()(
               state.limits.max_table_rows,
             );
           }
+          if (patch.max_cards !== undefined) {
+            next.max_cards = clampPositive(
+              patch.max_cards,
+              state.limits.max_cards,
+            );
+          }
           if (patch.max_output_tokens !== undefined) {
             next.max_output_tokens = clampTokens(patch.max_output_tokens);
           }
@@ -283,6 +292,8 @@ export const useGenerativeUIStore = create<RenderingState>()(
             next.chartErrors = t.chartErrors + 1;
           } else if (format === "latex") {
             next.latexErrors = t.latexErrors + 1;
+          } else if (format === "card") {
+            next.cardErrors = t.cardErrors + 1;
           }
           return { telemetry: next };
         });
@@ -362,7 +373,14 @@ export function getActivePreset(state: RenderingState): RenderingPreset {
 export function hasVisualOutputEnabled(state: RenderingState): boolean {
   return (
     state.enabled &&
-    (state.features.mermaid || state.features.latex || state.features.charts)
+    (state.features.mermaid ||
+      state.features.latex ||
+      state.features.charts ||
+      // v3: cards produce visual output, so they count here. The
+      // function is used to short-circuit renderer setup; omitting
+      // `cards` would disable the MarkdownRenderer's UI branch on
+      // chats that enable ONLY cards (mermaid/latex/charts off).
+      state.features.cards)
   );
 }
 

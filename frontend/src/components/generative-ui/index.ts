@@ -66,6 +66,29 @@ export { PeldrunChartBlock } from "./catalog/PeldrunChartBlock";
 export { PeldrunPlainText } from "./catalog/PeldrunPlainText";
 
 // ---------------------------------------------------------------------------
+// v3: UI cards (```ui fenced JSON blocks)
+// ---------------------------------------------------------------------------
+//
+// `PeldrunCardBlock` renders a single ```ui block. `CardRuntimeContext`
+// supplies image and prompt handlers that the block uses to resolve
+// `image.ref` / `image.query` and to dispatch action prompts.
+//
+// `buildGalleryIndex` / `normalizeQueryKey` are the canonical way to turn
+// a persisted ```image_gallery block into a lookup table. They are
+// exported so consumers (MarkdownRenderer in particular) do not need to
+// know the gallery payload's shape.
+//
+// NOTE: these modules are introduced together with the cards feature.
+// They do not exist in older builds; the import site is the one that
+// gates their use (see `effectiveFeatures.cards` in markdown-renderer).
+export {
+  PeldrunCardBlock,
+  CardRuntimeContext,
+} from "./catalog/PeldrunCardBlock";
+export type { CardRuntime } from "./catalog/PeldrunCardBlock";
+export { buildGalleryIndex, normalizeQueryKey } from "./catalog/galleryRefs";
+
+// ---------------------------------------------------------------------------
 // Note on removed exports
 // ---------------------------------------------------------------------------
 //

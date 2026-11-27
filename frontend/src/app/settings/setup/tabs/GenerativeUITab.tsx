@@ -39,6 +39,9 @@ import {
   Zap,
   Gauge,
   CircleDot,
+  // v3: cards and auto-image icons.
+  LayoutGrid,
+  Image as ImageIcon,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -133,7 +136,45 @@ const FEATURE_META: readonly FeatureMeta[] = [
     icon: <Code2 size={16} className="text-amber-500" />,
     accent: "#f59e0b",
   },
+  {
+    key: "cards",
+    title: "UI Cards",
+    description:
+      "Rich card layouts for places, options, products, and summaries. Renders ```ui fenced JSON blocks.",
+    icon: <LayoutGrid size={16} className="text-indigo-500" />,
+    accent: "#6366f1",
+  },
 ] as const;
+
+/**
+ * v3: primary feature keys used for the "X / N active" counter and the
+ * Coverage radial metric. `cards_auto_images` is intentionally NOT here:
+ * it is a sub-toggle under `cards`, not an independent capability, so
+ * counting it toward coverage would understate the metric for users who
+ * enable every primary format but decline the extra search spend.
+ */
+const PRIMARY_FEATURES: readonly RenderingFeatureKey[] = [
+  "mermaid",
+  "latex",
+  "charts",
+  "code_highlighting",
+  "cards",
+];
+
+/**
+ * v3: `cards_auto_images` sub-toggle. Rendered separately from
+ * FEATURE_META because it depends on `cards` being on, carries a
+ * cost warning, and must not participate in the preset equality check
+ * (see `classifyPreset` in types.ts).
+ */
+const AUTO_IMAGE_META = {
+  key: "cards_auto_images" as const,
+  title: "Auto Image Search",
+  description:
+    "Sends the model-written image search phrases to your configured search provider without pressing the search button.",
+  icon: <ImageIcon size={16} className="text-pink-500" />,
+  accent: "#ec4899",
+} as const;
 
 // ---------------------------------------------------------------------------
 // Motion presets
@@ -176,16 +217,23 @@ export function GenerativeUITab(): React.JSX.Element {
       : 100;
 
   const totalErrors =
-    telemetry.mermaidErrors + telemetry.chartErrors + telemetry.latexErrors;
+    telemetry.mermaidErrors +
+    telemetry.chartErrors +
+    telemetry.latexErrors +
+    telemetry.cardErrors;
 
+  // v3: count only the primary features. `Object.values(features)`
+  // would now include `cards_auto_images`, inflating the denominator
+  // and making coverage drop when a user opts out of the extra search
+  // spend — which is a valid configuration, not a partial one.
   const enabledFeatureCount = useMemo(
-    () => Object.values(features).filter(Boolean).length,
+    () => PRIMARY_FEATURES.filter((k) => features[k]).length,
     [features]
   );
 
   const radialData = useMemo(() => {
     const reliability = successRate;
-    const coverage = (enabledFeatureCount / 4) * 100;
+    const coverage = (enabledFeatureCount / PRIMARY_FEATURES.length) * 100;
     const errorFree =
       telemetry.totalRenders > 0
         ? Math.max(
@@ -205,6 +253,9 @@ export function GenerativeUITab(): React.JSX.Element {
       { name: "Mermaid", value: telemetry.mermaidErrors, fill: PIE_COLORS[0] },
       { name: "Charts", value: telemetry.chartErrors, fill: PIE_COLORS[1] },
       { name: "LaTeX", value: telemetry.latexErrors, fill: PIE_COLORS[2] },
+      // v3: card render errors (invalid JSON, unknown layout, missing
+      // title). Same treatment as the other three formats.
+      { name: "Cards", value: telemetry.cardErrors, fill: PIE_COLORS[3] },
     ].filter((i) => i.value > 0);
     return items;
   }, [telemetry]);
@@ -381,7 +432,7 @@ export function GenerativeUITab(): React.JSX.Element {
               <Zap className="h-4 w-4 text-primary" />
               <span>Rendering Features</span>
               <span className="text-[10px] font-mono text-muted-foreground ml-auto">
-                {enabledFeatureCount} / 4 active
+                {enabledFeatureCount} / {PRIMARY_FEATURES.length} active
               </span>
             </label>
 
@@ -441,6 +492,77 @@ export function GenerativeUITab(): React.JSX.Element {
                 );
               })}
             </div>
+
+            {/* v3: auto-image sub-toggle. Lives inside the Rendering
+                Features block because it belongs to the cards feature,
+                but visually decoupled (full-width, dashed border) to
+                signal it is a sub-option with a cost side effect. */}
+            {(() => {
+              const cardsOn = features.cards;
+              const autoOn = features.cards_auto_images;
+              return (
+                <motion.label
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: 0.4 }}
+                  className={`group relative flex items-start gap-3 p-3.5 rounded-xl border-dashed border cursor-pointer transition-all ${
+                    !cardsOn
+                      ? "border-border/40 bg-muted/10 text-muted-foreground/60 cursor-not-allowed"
+                      : autoOn
+                      ? "border-pink-500/60 bg-pink-500/5 text-foreground shadow-sm"
+                      : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/40 hover:border-pink-500/40"
+                  }`}
+                  title={!cardsOn ? "Enable UI Cards first" : undefined}
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoOn && cardsOn}
+                    onChange={() => {
+                      if (!cardsOn) return;
+                      toggleFeature(AUTO_IMAGE_META.key);
+                    }}
+                    disabled={!cardsOn}
+                    className="rounded text-primary focus:ring-primary w-4 h-4 cursor-pointer mt-0.5 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {AUTO_IMAGE_META.icon}
+                      <span className="font-semibold text-[12px]">
+                        {AUTO_IMAGE_META.title}
+                      </span>
+                      <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-background/70 border border-border/40">
+                        Optional
+                      </span>
+                      {!cardsOn && (
+                        <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400">
+                          Requires UI Cards
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] opacity-80 leading-snug">
+                      {AUTO_IMAGE_META.description}
+                    </p>
+                    {cardsOn && autoOn && (
+                      <p className="text-[10px] text-pink-600 dark:text-pink-400 font-mono leading-snug">
+                        Each card-bearing message can spend up to 6 image
+                        searches before the response completes.
+                      </p>
+                    )}
+                  </div>
+                  {cardsOn && autoOn && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="w-2 h-2 rounded-full shrink-0 mt-1.5"
+                      style={{
+                        backgroundColor: AUTO_IMAGE_META.accent,
+                        boxShadow: `0 0 8px ${AUTO_IMAGE_META.accent}80`,
+                      }}
+                    />
+                  )}
+                </motion.label>
+              );
+            })()}
           </motion.div>
 
           {/* ========================================================== */}
@@ -494,6 +616,18 @@ export function GenerativeUITab(): React.JSX.Element {
                 delay={0.45}
               />
               <LimitSlider
+                icon={<LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />}
+                label="Max Cards per Block"
+                value={limits.max_cards}
+                displayValue={`${limits.max_cards} cards`}
+                min={1}
+                max={24}
+                step={1}
+                hint="Cap on cards emitted inside a single ```ui block. The backend enforces this as a directive rule."
+                onChange={(v) => setLimits({ max_cards: v })}
+                delay={0.5}
+              />
+              <LimitSlider
                 icon={<RotateCcw className="h-3.5 w-3.5 text-muted-foreground" />}
                 label="Auto-Correction Retries"
                 value={maxRetries}
@@ -503,7 +637,7 @@ export function GenerativeUITab(): React.JSX.Element {
                 step={1}
                 hint="Progressive fallback attempts when rendering fails. Values above 3 saturate at the number of available strategies."
                 onChange={(v) => setMaxRetries(v)}
-                delay={0.5}
+                delay={0.55}
               />
             </div>
           </motion.div>
@@ -641,6 +775,15 @@ export function GenerativeUITab(): React.JSX.Element {
                       </span>
                     </span>
                   )}
+                  {telemetry.cardErrors > 0 && (
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                      Cards:{" "}
+                      <span className="font-mono text-rose-500 font-bold">
+                        {telemetry.cardErrors}
+                      </span>
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -656,7 +799,7 @@ export function GenerativeUITab(): React.JSX.Element {
               icon={<Activity size={18} className="text-primary" />}
               accent="#3b82f6"
               subtitle="Rendering pipeline executions"
-              hint={`${enabledFeatureCount} of 4 features active`}
+              hint={`${enabledFeatureCount} of ${PRIMARY_FEATURES.length} features active`}
               delay={0.6}
             />
             <KpiCard
@@ -674,7 +817,7 @@ export function GenerativeUITab(): React.JSX.Element {
               value={totalErrors}
               icon={<AlertCircle size={18} className="text-rose-500" />}
               accent="#f43f5e"
-              subtitle={`${telemetry.mermaidErrors} mermaid · ${telemetry.chartErrors} charts · ${telemetry.latexErrors} latex`}
+              subtitle={`${telemetry.mermaidErrors} mermaid · ${telemetry.chartErrors} charts · ${telemetry.latexErrors} latex · ${telemetry.cardErrors} cards`}
               hint="Errors auto-fallback to plain Markdown"
               delay={0.7}
             />

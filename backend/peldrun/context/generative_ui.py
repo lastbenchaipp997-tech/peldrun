@@ -20,10 +20,13 @@ Template note:
     contain literal `{` and `}` characters (JSON examples in the chart
     rules). Using `str.format` would raise a KeyError on those braces.
 """
+# backend\peldrun\context\generative_ui.py
+
 
 from __future__ import annotations
 
 import logging
+import re
 from string import Template
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +44,11 @@ MIN_RETRIES = 0
 MAX_RETRIES = 5
 DEFAULT_RETRIES = 1
 
+# v3: Maximum number of image references forwarded to the model inside the
+# [Image Search Results] block. Keeping this bounded protects the context
+# window on small models and mirrors MAX_IMAGE_REFS in the frontend.
+MAX_IMAGE_REFS = 8
+
 # Default per-format limits. These can be overridden per-request via the
 # `limits` sub-object of the settings dictionary.
 DEFAULT_FEATURES: Dict[str, bool] = {
@@ -48,12 +56,20 @@ DEFAULT_FEATURES: Dict[str, bool] = {
     "latex": True,
     "charts": True,
     "code_highlighting": True,
+    # v3: UI cards block. Disabled by default; the model must not emit
+    # ```ui blocks unless the user explicitly enables the feature.
+    "cards": False,
+    # v3: Allow the model to request images via image.query. Requires
+    # `cards` to be on; spends the configured image-search provider quota.
+    "cards_auto_images": False,
 }
 
 DEFAULT_LIMITS: Dict[str, int] = {
     "max_mermaid_nodes": 40,
     "max_chart_points": 30,
     "max_table_rows": 50,
+    # v3: Upper bound on cards inside a single ```ui block.
+    "max_cards": 6,
     # DEPRECATED: this field is retained only for on-disk compatibility with
     # previously saved settings. It is NOT consumed by any code path — the
     # effective `max_tokens` is resolved per-model by
@@ -73,6 +89,11 @@ FEATURE_ALIASES: Dict[str, str] = {
     "chart": "charts",
     "code": "code_highlighting",
     "code_highlighting": "code_highlighting",
+    # v3: UI cards. "ui" is accepted as a short alias so older payloads
+    # (which used the fenced `ui` tag) continue to map to the same feature.
+    "cards": "cards",
+    "ui": "cards",
+    "cards_auto_images": "cards_auto_images",
 }
 
 LIMIT_ALIASES: Dict[str, str] = {
@@ -84,6 +105,9 @@ LIMIT_ALIASES: Dict[str, str] = {
     "maxTableRows": "max_table_rows",
     "max_output_tokens": "max_output_tokens",
     "maxOutputTokens": "max_output_tokens",
+    # v3: Card count cap.
+    "max_cards": "max_cards",
+    "maxCards": "max_cards",
 }
 
 
@@ -177,7 +201,7 @@ def _has_any_feature(features: Dict[str, bool]) -> bool:
     """True when at least one non-default rendering feature is active."""
     return any(
         features.get(key, False)
-        for key in ("mermaid", "latex", "charts")
+        for key in ("mermaid", "latex", "charts", "cards")
     )
 
 
@@ -286,6 +310,87 @@ _TABLE_RULES = (
     "multiple tables with a heading above each."
 )
 
+# v3: UI cards directive. Uses $image_rule and $max_cards as Template
+# placeholders. All other braces are literal JSON examples and must
+# survive templating unchanged (hence Template, not str.format).
+_CARD_RULES = (
+    "[UI CARDS]\n"
+    "- For results that are better scanned than read (places, options, products, "
+    "categories, summaries), emit ONE fenced block tagged `ui` containing one JSON "
+    "object, preceded by a single prose sentence.\n"
+    "- Single card: {\"type\":\"card\",\"layout\":\"media-start\",\"title\":\"...\","
+    "\"subtitle\":\"...\",\"icon\":\"map\",\"accent\":\"blue\",\"style\":\"tinted\","
+    "\"image\":{\"ref\":\"img_1\",\"alt\":\"...\"},"
+    "\"tags\":[\"A\",{\"label\":\"B\",\"accent\":\"green\"}],"
+    "\"stats\":[{\"label\":\"...\",\"value\":\"...\"}],"
+    "\"actions\":[{\"label\":\"...\",\"prompt\":\"...\"}]}\n"
+    "- Several cards: {\"type\":\"grid\",\"columns\":2,\"items\":[<card>,<card>]}\n"
+    "- Sequential explanation / layered map: "
+    "{\"type\":\"flow\",\"direction\":\"vertical\",\"title\":\"...\","
+    "\"items\":[{\"title\":\"...\",\"subtitle\":\"...\",\"icon\":\"map\","
+    "\"accent\":\"blue\",\"style\":\"tinted\"},...]}. Use for step-by-step "
+    "processes, layered architectures, or concept maps with 3+ stages. Each "
+    "item renders as its own card with an arrow to the next. direction is "
+    "`vertical` (default) or `horizontal`; prefer horizontal for short 2-4 "
+    "stage flows and vertical for deeper processes. Items accept the same "
+    "optional fields as a single card; `stats` and `actions` are ignored "
+    "inside a flow.\n"
+    "- Interactive form: {\"type\":\"form\",\"title\":\"...\","
+    "\"description\":\"...\",\"accent\":\"blue\",\"style\":\"tinted\","
+    "\"questions\":[{\"id\":\"q1\",\"label\":\"...\",\"type\":\"single\"|\"multi\","
+    "\"required\":true,\"options\":[{\"id\":\"a\",\"label\":\"...\"},...]}],"
+    "\"submitLabel\":\"...\","
+    "\"submitPrompt\":\"Answers: {{q1}} / {{q2}}. Suggest a plan.\"}. Use a form "
+    "when the user's request genuinely needs clarifying answers before you can "
+    "proceed (budget, preferences, scope, constraints). Each question is either "
+    "`single` (radio buttons) or `multi` (checkboxes). At submit time, "
+    "`{{qid}}` placeholders are replaced with the comma-joined labels the user "
+    "selected, and the resulting string is sent as the user's next message. If "
+    "`submitPrompt` is omitted, a plain list of answers is sent instead. Max 6 "
+    "questions, 8 options each; use `required: true` only for questions the "
+    "answer genuinely cannot proceed without.\n"
+    "- layout is one of: vertical, media-start, media-end, overlay, tile, compact. "
+    "Use tile for category overviews (icon + title + tags), media-start for lists "
+    "with pictures, overlay for a hero item.\n"
+    "- icon is one of: map, route, pin, chart-line, chart-bar, chart-pie, flow, grid, "
+    "table, calendar, activity, document, info, star, users, clock, globe, package, idea.\n"
+    "- accent is optional. One of: blue, sky, cyan, teal, emerald, green, lime, amber, "
+    "yellow, orange, red, rose, pink, fuchsia, purple, violet, indigo, slate. "
+    "Renders as a soft pastel background. Use it to group related cards, "
+    "emphasize a hero item, or color-code layers of a flow.\n"
+    "- style is optional and one of: tinted (default; soft gradient), outlined "
+    "(2px border, transparent fill), minimal (very light tint, thin border). "
+    "Choose a style per card to express hierarchy: tinted for primary items, "
+    "outlined for secondary options, minimal for dense category grids.\n"
+    "- tags: each entry is either a plain string (inherits the card's accent, "
+    "or falls back to muted gray when the card has no accent) or "
+    "{\"label\":\"...\",\"accent\":\"...\"} for a per-tag color. Use tag colors "
+    "for status (green = ok, red = problem, amber = caution) or group "
+    "membership.\n"
+    "- Write every visible string in the user's language. Keys and enum values stay English.\n"
+    "$image_rule\n"
+    "- Plain text only inside strings: no Markdown, no HTML. Title <= 60 chars.\n"
+    "- At most $max_cards cards per block."
+)
+
+# v3: Image rule when auto-image is OFF. The model may only reference image
+# ids already listed under [Image Search Results] in the user message.
+_IMAGE_RULE_REF_ONLY = (
+    "- image.ref must be an id (img_1, img_2, ...) listed under [Image Search Results] "
+    "in the user message. Never write image URLs. If no ids are listed, omit image."
+)
+
+# v3: Image rule when auto-image is ON. The model may reference an existing
+# id, or supply a short search query that is resolved server-side after the
+# response completes.
+_IMAGE_RULE_WITH_QUERY = (
+    "- image: if ids (img_1, ...) are listed under [Image Search Results], use image.ref. "
+    "Otherwise, for a card about a specific well-known place, landmark, product, animal "
+    "or artwork where a photo clearly helps, set image.query to a short search phrase "
+    "(2-6 words, usually the English name). At most 6 cards per block get image.query. "
+    "Omit image for people, abstract topics, or when unsure. Never write image URLs."
+)
+
 
 def _build_sections(
     features: Dict[str, bool],
@@ -332,6 +437,23 @@ def _build_sections(
 
     if features.get("code_highlighting"):
         sections.append(_CODE_RULES)
+
+    # v3: UI cards section. The image rule depends on whether the user has
+    # opted into auto-image search: default is ref-only (safe), opt-in also
+    # allows image.query (spends the search provider quota server-side).
+    if features.get("cards"):
+        image_rule = (
+            _IMAGE_RULE_WITH_QUERY
+            if features.get("cards_auto_images")
+            else _IMAGE_RULE_REF_ONLY
+        )
+        card_template = Template(_CARD_RULES)
+        sections.append(
+            card_template.safe_substitute(
+                max_cards=limits["max_cards"],
+                image_rule=image_rule,
+            )
+        )
 
     return sections
 
@@ -392,12 +514,73 @@ def build_generative_ui_prompt(settings: Optional[Dict[str, Any]]) -> str:
     return "\n\n".join(sections)
 
 
+# ---------------------------------------------------------------------------
+# Public helpers for UI cards (v3)
+# ---------------------------------------------------------------------------
+
+
+def _one_line(value: Any, limit: int) -> str:
+    """Collapse untrusted text to a single-line, brace-free string.
+
+    Card and image titles may come from arbitrary web pages. The result is
+    embedded inside a JSON payload, so we strip characters that could break
+    the surrounding fences (backticks) or the JSON parser (braces), and cap
+    the length to avoid pathological payload sizes.
+    """
+    return re.sub(r"[\s{}<>`]+", " ", str(value or "")).strip()[:limit]
+
+
+def cards_enabled(settings: Optional[Dict[str, Any]]) -> bool:
+    """True when the global feature is on AND the `cards` sub-feature is on."""
+    if not _is_enabled(settings):
+        return False
+    assert isinstance(settings, dict)
+    return bool(_normalize_features(settings).get("cards"))
+
+
+def cards_auto_images_enabled(settings: Optional[Dict[str, Any]]) -> bool:
+    """True when cards are on AND the user opted into automatic image search."""
+    if not cards_enabled(settings):
+        return False
+    assert isinstance(settings, dict)
+    return bool(_normalize_features(settings).get("cards_auto_images"))
+
+
+def format_image_refs(images: Any, limit: int = MAX_IMAGE_REFS) -> str:
+    """Render the [Image Search Results] block for the model.
+
+    Each line has the form:
+        img_<n>: <title> (<host>, <WxH>)
+
+    The 1-based index maps directly to the gallery index built by the
+    frontend, so `image.ref = "img_1"` resolves to the first image in the
+    gallery without an extra lookup table.
+    """
+    if not isinstance(images, list):
+        return ""
+    lines: List[str] = []
+    for idx, img in enumerate(images[:limit], start=1):
+        if not isinstance(img, dict):
+            continue
+        title = _one_line(img.get("title"), 70) or "image"
+        host = _one_line(img.get("source"), 40)
+        w, h = img.get("width"), img.get("height")
+        dims = f"{w}x{h}" if isinstance(w, int) and isinstance(h, int) else ""
+        meta = ", ".join(x for x in (host, dims) if x)
+        lines.append(f"img_{idx}: {title}" + (f" ({meta})" if meta else ""))
+    return "\n".join(lines)
+
+
 __all__ = [
     "DEFAULT_FEATURES",
     "DEFAULT_LIMITS",
+    "MAX_IMAGE_REFS",
     "MAX_OUTPUT_TOKENS",
     "MIN_OUTPUT_TOKENS",
     "build_generative_ui_prompt",
+    "cards_auto_images_enabled",
+    "cards_enabled",
+    "format_image_refs",
     "get_max_output_tokens",
     "get_max_retries",
 ]

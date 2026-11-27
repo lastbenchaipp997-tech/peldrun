@@ -339,7 +339,25 @@ export function useJobDetails(params: UseJobDetailsParams) {
             }
 
             return {
-              id: t.job_id || `turn-${idx}`,
+              // v4.1 FIX (root cause): `t.job_id` is NOT guaranteed unique
+              // across turns. The backend persists `turns[].job_id` as
+              // the session's `chat_id` in several cases (e.g. legacy
+              // sessions written before per-turn job ids existed, or
+              // any turn produced by a `regenerate` that reused the
+              // chat-scoped id). Because `id` is consumed as a React
+              // list key in ChatThread, two such turns collide:
+              //   "Encountered two children with the same key"
+              //
+              // Appending `idx` guarantees uniqueness in this hook,
+              // which is what makes the whole history render reliably
+              // after F5 — regardless of what the backend stored.
+              //
+              // `jobId` below is left verbatim (still carries the real
+              // job id, possibly empty) because regeneration sends it
+              // to `POST /api/run` as `regenerate_turn_id`. Changing
+              // that field would break regeneration against older
+              // sessions.
+              id: `${t.job_id || "turn"}-${idx}`,
               jobId: t.job_id || "",
               prompt: t.prompt || "",
               timestamp: t.created_at || "",

@@ -24,7 +24,13 @@ export type RenderingFeatureKey =
   | "mermaid"
   | "latex"
   | "charts"
-  | "code_highlighting";
+  | "code_highlighting"
+  // v3: UI cards block (```ui fenced JSON) rendered by PeldrunCardBlock.
+  | "cards"
+  // v3: Permit the model to request images via `image.query` inside
+  // cards. Requires `cards` to be on. Enabling this spends the search
+  // provider quota for every card-bearing message.
+  | "cards_auto_images";
 
 /**
  * Per-feature on/off state.
@@ -37,6 +43,21 @@ export interface RenderingFeatures {
   latex: boolean;
   charts: boolean;
   code_highlighting: boolean;
+
+  /**
+   * Enable the ```ui fenced block. The backend emits a [UI CARDS]
+   * directive only when this is true. Defaults to false so the model
+   * keeps producing plain Markdown until the user opts in.
+   */
+  cards: boolean;
+
+  /**
+   * Allow the model to write `image.query` inside a card. Resolved
+   * server-side AFTER the response completes (adds up to ~10s before
+   * the `final` SSE event) and spends the configured image-search
+   * provider quota. Requires `cards` to be on. Defaults to false.
+   */
+  cards_auto_images: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +79,13 @@ export interface RenderingLimits {
 
   /** Maximum number of rows in a single Markdown table. */
   max_table_rows: number;
+
+  /**
+   * Upper bound on cards emitted inside a single ```ui block. Advisory
+   * for the model (the backend rule states "At most N cards per block")
+   * and enforced by the renderer.
+   */
+  max_cards: number;
 
   /**
    * @deprecated Not consumed by any renderer or backend code path. The
@@ -131,6 +159,7 @@ export const DEFAULT_LIMITS: RenderingLimits = {
   max_mermaid_nodes: 40,
   max_chart_points: 30,
   max_table_rows: 50,
+  max_cards: 6,
   max_output_tokens: 4096,
 };
 
@@ -143,6 +172,12 @@ export const DEFAULT_FEATURES: RenderingFeatures = {
   latex: true,
   charts: true,
   code_highlighting: true,
+  // v3: Cards and auto-image are OPT-IN on every preset. The `full`
+  // preset enables `cards` but still leaves `cards_auto_images` off,
+  // because enabling it spends the search provider quota without a
+  // user click — a separate, explicit decision.
+  cards: false,
+  cards_auto_images: false,
 };
 
 /**
@@ -165,12 +200,14 @@ export const PRESET_DEFINITIONS: readonly RenderingPresetDefinition[] = [
     id: "minimal",
     title: "Minimal",
     description:
-      "Plain Markdown only. No diagrams, no math, no charts. Lowest token cost.",
+      "Plain Markdown only. No diagrams, no math, no charts, no cards. Lowest token cost.",
     features: {
       mermaid: false,
       latex: false,
       charts: false,
       code_highlighting: true,
+      cards: false,
+      cards_auto_images: false,
     },
     limits: DEFAULT_LIMITS,
   },
@@ -184,6 +221,8 @@ export const PRESET_DEFINITIONS: readonly RenderingPresetDefinition[] = [
       latex: true,
       charts: true,
       code_highlighting: true,
+      cards: false,
+      cards_auto_images: false,
     },
     limits: DEFAULT_LIMITS,
   },
@@ -191,17 +230,23 @@ export const PRESET_DEFINITIONS: readonly RenderingPresetDefinition[] = [
     id: "full",
     title: "Full Power",
     description:
-      "Every rendering feature enabled with extended limits for large reports.",
+      "Every rendering feature enabled with extended limits for large reports. UI cards are enabled with a larger card cap; auto-image search stays off until you explicitly opt in.",
     features: {
       mermaid: true,
       latex: true,
       charts: true,
       code_highlighting: true,
+      cards: true,
+      // Deliberately off even in `full`: opting into auto-image search
+      // spends the search provider quota per message. It must be a
+      // separate, explicit user decision.
+      cards_auto_images: false,
     },
     limits: {
       max_mermaid_nodes: 80,
       max_chart_points: 60,
       max_table_rows: 100,
+      max_cards: 12,
       max_output_tokens: 8192,
     },
   },
@@ -232,6 +277,12 @@ export interface RenderingTelemetry {
   /** Count of LaTeX parse errors encountered. */
   latexErrors: number;
 
+  /**
+   * Count of card render errors encountered (invalid JSON, unknown
+   * layout, missing required fields, unresolved image ref). v3.
+   */
+  cardErrors: number;
+
   /** Latency of the last successful render, in milliseconds. */
   lastRenderLatencyMs: number;
 }
@@ -242,6 +293,7 @@ export const EMPTY_TELEMETRY: RenderingTelemetry = {
   mermaidErrors: 0,
   chartErrors: 0,
   latexErrors: 0,
+  cardErrors: 0,
   lastRenderLatencyMs: 0,
 };
 
@@ -331,9 +383,16 @@ export function classifyPreset(settings: RenderingSettings): RenderingPreset {
       preset.features.latex === settings.features.latex &&
       preset.features.charts === settings.features.charts &&
       preset.features.code_highlighting === settings.features.code_highlighting &&
+      // v3: compare `cards` so enabling it flips minimal/balanced to
+      // `custom`. `cards_auto_images` is deliberately NOT compared: any
+      // of the three presets may carry it, and the preset label should
+      // not flip to `custom` just because the user opted into auto
+      // image search on top of their chosen preset.
+      preset.features.cards === settings.features.cards &&
       preset.limits.max_mermaid_nodes === settings.limits.max_mermaid_nodes &&
       preset.limits.max_chart_points === settings.limits.max_chart_points &&
       preset.limits.max_table_rows === settings.limits.max_table_rows &&
+      preset.limits.max_cards === settings.limits.max_cards &&
       preset.limits.max_output_tokens === settings.limits.max_output_tokens
     ) {
       return preset.id;
@@ -368,6 +427,7 @@ export function hasAnyFeatureEnabled(features: RenderingFeatures): boolean {
     features.mermaid ||
     features.latex ||
     features.charts ||
-    features.code_highlighting
+    features.code_highlighting ||
+    features.cards
   );
 }

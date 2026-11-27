@@ -404,12 +404,15 @@ async def run_direct_chat(
             started_at=start_time,
         )
 
-        result_text = append_image_gallery_block(
+        result_text = await append_image_gallery_block(
             result_text,
             collected_proxied_images,
             prompt,
             search_provider_name,
             job_id,
+            chat_id=chat_id,
+            project_id=project_id,
+            active_llm=active_llm,
         )
 
         print(

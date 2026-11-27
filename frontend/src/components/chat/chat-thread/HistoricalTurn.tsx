@@ -55,6 +55,13 @@ export interface HistoricalTurnProps {
    */
   activeProvider?: string;
   onRegenerate?: (turnIndex: number, turn: ChatTurn) => void;
+  /**
+   * v3: forwarded to ChatDeliverable -> MarkdownRenderer so ```ui card
+   * prompt actions remain functional on archived turns. When omitted,
+   * prompt-only actions are hidden by PeldrunCardBlock (href actions
+   * still open normally).
+   */
+  onSendPrompt?: (prompt: string) => void;
 }
 
 /**
@@ -88,6 +95,7 @@ export function HistoricalTurn({
   activeModelName,
   activeProvider,
   onRegenerate,
+  onSendPrompt,
 }: HistoricalTurnProps) {
   // Determine mode from ACTUAL evidence, not from the (possibly stale)
   // `mode` field. Presence of tool_call/observation events is the
@@ -226,6 +234,9 @@ export function HistoricalTurn({
           latencyMs={turn.usage?.latency_ms}
           tokensPerSecond={turn.usage?.tokens_per_second}
           onRegenerate={onRegenerate ? () => onRegenerate(tIdx, turn) : undefined}
+          // v3: forward to MarkdownRenderer so card actions on this
+          // archived turn can dispatch new messages.
+          onSendPrompt={onSendPrompt}
         />
       )}
     </div>

@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional
 
 from omweb.job_manager import job_manager
 from omweb.sse_events import SSEEvent, SSEEventType, dispatch_event
+from peldrun.context.generative_ui import cards_enabled, format_image_refs
 
 from .image_results import emit_image_results_event_if_present
 from .provider_routing import resolve_provider_and_extras
@@ -216,21 +217,41 @@ async def run_chat_web_search(
             images_emitted = False
 
         if images_emitted:
-            # Image mode: the gallery is already rendered, so instruct the
-            # model not to repeat image URLs. The text table stays in the
-            # prompt so specific items can still be cited.
-            augmented_prompt = (
-                f"{prompt}\n\n"
-                "[Image Search Results]\n"
-                "The following images were found and are ALREADY "
-                "DISPLAYED in a visual gallery in the user's UI. "
-                "Do NOT repeat image URLs in your response - the "
-                "user can already see them. Briefly summarize the "
-                "topic, highlight interesting aspects, and cite "
-                "source pages when relevant.\n\n"
-                f"{search_result.output}\n"
-                "[/Image Search Results]"
-            )
+            # v3: When cards are enabled, forward stable image ids so the
+            # model can reference a picture inside a ```ui block via
+            # image.ref. The legacy "do NOT repeat image URLs" wording is
+            # retained on the non-cards path because the gallery is the
+            # only consumer of those images in that mode.
+            #
+            # format_image_refs truncates to MAX_IMAGE_REFS entries and
+            # emits the same 1-based indices used by the frontend gallery,
+            # so `image.ref = "img_1"` resolves without a lookup table.
+            if cards_enabled(active_llm.get("generative_ui")):
+                augmented_prompt = (
+                    f"{prompt}\n\n"
+                    "[Image Search Results]\n"
+                    "These images were found. Each has an id. To show a picture inside a "
+                    "ui card set image.ref to its id. Never write image URLs. Images you do "
+                    "not use stay visible in the gallery.\n\n"
+                    f"{format_image_refs(proxied_images)}\n"
+                    "[/Image Search Results]"
+                )
+            else:
+                # Image mode: the gallery is already rendered, so instruct the
+                # model not to repeat image URLs. The text table stays in the
+                # prompt so specific items can still be cited.
+                augmented_prompt = (
+                    f"{prompt}\n\n"
+                    "[Image Search Results]\n"
+                    "The following images were found and are ALREADY "
+                    "DISPLAYED in a visual gallery in the user's UI. "
+                    "Do NOT repeat image URLs in your response - the "
+                    "user can already see them. Briefly summarize the "
+                    "topic, highlight interesting aspects, and cite "
+                    "source pages when relevant.\n\n"
+                    f"{search_result.output}\n"
+                    "[/Image Search Results]"
+                )
         else:
             augmented_prompt = (
                 f"{prompt}\n\n"

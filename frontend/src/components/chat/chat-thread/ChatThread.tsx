@@ -102,6 +102,10 @@ export function ChatThread({
   onCancelSubtask,
   onRegenerate,
   onOpenReview,
+  // v3: forwarded through HistoricalTurn and ChatDeliverable into every
+  // MarkdownRenderer, then into CardRuntimeContext. Enables ```ui card
+  // prompt-action buttons to dispatch a new message.
+  onSendPrompt,
 }: ChatThreadProps) {
   // Two distinct provider values flow into this component:
   //
@@ -220,7 +224,22 @@ export function ChatThread({
         <div ref={contentRef} className="w-full max-w-[900px] mx-auto space-y-6">
           {/* Historical Turns */}
         {historyTurns.map((turn, tIdx) => (
-          <div key={turn.id || `turn-${tIdx}`}>
+          // v4.1 FIX: append `-${tIdx}` unconditionally so the key is
+          // ALWAYS unique, even when `turn.id` collides across turns.
+          //
+          // Root cause: `turn.id` can be duplicated when
+          //   (a) the backend's `session.json` stores turns with
+          //       `id: chat_id` (all turns share one chat-scoped id), or
+          //   (b) `activeJobId` is stale during a rapid double-click on
+          //       a ```ui card prompt action, so two archives fire with
+          //       the same job id before the new run's id arrives.
+          //
+          // React's reconciliation on an append-only history does not
+          // need stable ids across reorders — the list is only ever
+          // appended to or truncated from the end — so `-${tIdx}` is a
+          // safe disambiguator. `turn.jobId` remains the semantic id
+          // used by regeneration.
+          <div key={`${turn.id || "turn"}-${tIdx}`}>
             <HistoricalTurn
               turn={turn}
               tIdx={tIdx}
@@ -235,6 +254,9 @@ export function ChatThread({
               activeModelName={activeModelName}
               activeProvider={activeProvider}
               onRegenerate={onRegenerate}
+              // v3: forward to ChatDeliverable -> MarkdownRenderer so
+              // card actions on historical turns remain functional.
+              onSendPrompt={onSendPrompt}
             />
           </div>
         ))}
@@ -374,6 +396,9 @@ export function ChatThread({
                 ? () => onRegenerate(-1)
                 : undefined
             }
+            // v3: forward to MarkdownRenderer for card actions in the
+            // current turn's deliverable.
+            onSendPrompt={onSendPrompt}
           />
         )}
 

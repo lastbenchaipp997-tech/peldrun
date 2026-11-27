@@ -1548,7 +1548,24 @@ export function ChatContainer({
         setHistoryTurns((prev) => [
           ...prev,
           {
-            id: activeJobId || `turn-${Date.now()}`,
+            // v4.1 FIX: `id` is a React list key, NOT the job id. Making
+            // it globally unique here prevents the
+            //   "Encountered two children with the same key"
+            // warning when:
+            //   * two card-action clicks fire before the first
+            //     POST /api/run response arrives, so both archives
+            //     read the same stale `activeJobId`, or
+            //   * `activeJobId` was hydrated from the backend as a
+            //     chat id (e.g. `chat_mwyvjlrt_xa2w04`) instead of a
+            //     genuine job id.
+            //
+            // `jobId` below still carries the real (possibly empty)
+            // job id — that is the field regeneration and backend
+            // routes actually use, so this change does not affect
+            // those code paths.
+            id: `turn_${Date.now().toString(36)}_${Math.random()
+              .toString(36)
+              .substring(2, 8)}`,
             jobId: activeJobId || "",
             prompt: submittedPrompt,
             timestamp: sessionTimestamp || new Date().toLocaleString(),
@@ -1795,6 +1812,44 @@ export function ChatContainer({
       }
     },
     [startTaskInner]
+  );
+
+  // v3: bridge from `PeldrunCardBlock` prompt actions to the run dispatch
+  // path. `CardRuntimeContext.sendPrompt` calls this with the raw prompt
+  // string the model attached to the card action button.
+  //
+  // Guards:
+  //   * empty prompt -> ignored (defensive; PeldrunCardBlock already
+  //                     hides prompt-less actions)
+  //   * run in progress -> toast, do not queue. Matches the composer's
+  //                        disabled state so the UX stays consistent
+  //                        between the two send entry points.
+  //   * handleStartTask rejection (network, backend) -> logged. The
+  //                        status is already flipped to "failed" by
+  //                        handleStartTask's own error handler, so the
+  //                        UI reflects the failure without a second
+  //                        error surface here.
+  //
+  // `handleStartTask` archives the current turn into `historyTurns`
+  // before starting the new run, so the card the user clicked remains
+  // visible in the transcript above the new exchange. This is the
+  // intended UX.
+  const handleSendPrompt = useCallback(
+    (prompt: string) => {
+      const text = (prompt || "").trim();
+      if (!text) return;
+      if (status === "running" || status === "cancelling") {
+        showToast.error(
+          "Busy",
+          "Wait for the current response to finish before sending another message."
+        );
+        return;
+      }
+      handleStartTask(text).catch((err: any) => {
+        console.error("[ChatContainer] Card action failed:", err);
+      });
+    },
+    [status, handleStartTask],
   );
 
   // --- MCP Authentication Handlers ------------------------------------------
@@ -2293,6 +2348,10 @@ export function ChatContainer({
             onCancelSubtask={handleCancelSubtask}
             onRegenerate={handleRegenerate}
             onOpenReview={handleOpenReview}
+            // v3: forwarded through ChatThread to every turn's
+            // MarkdownRenderer, then into CardRuntimeContext. Card
+            // prompt actions click-through to the composer.
+            onSendPrompt={handleSendPrompt}
           />
         )}
 

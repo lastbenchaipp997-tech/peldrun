@@ -209,6 +209,15 @@ export interface ChatThreadProps {
   // Pause/Resume hooks were removed in Phase H.
   onRegenerate?: (turnIndex: number, turn?: ChatTurn) => void;
   onOpenReview?: (operationId: string) => void;
+  /**
+   * v3: forwarded through ChatThread -> HistoricalTurn / ChatDeliverable
+   * -> MarkdownRenderer -> CardRuntimeContext.sendPrompt. Enables ```ui
+   * card prompt-action buttons to dispatch a new message.
+   *
+   * When omitted, prompt-only card actions are hidden by PeldrunCardBlock
+   * (href actions still open normally) — cards themselves render fully.
+   */
+  onSendPrompt?: (prompt: string) => void;
 }
 
 export const HUMAN_TOOL_NAMES = new Set(["ask_human", "human_input"]);

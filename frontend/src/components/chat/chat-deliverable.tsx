@@ -108,6 +108,13 @@ interface ChatDeliverableProps {
    * externally (before the deliverable).
    */
   reasoningContent?: string;
+  /**
+   * v3: forwarded to the primary-response MarkdownRenderer so ```ui card
+   * prompt actions become clickable. Ignored in the error/stop branch —
+   * cards do not appear in error payloads, and passing the callback
+   * there would just add noise.
+   */
+  onSendPrompt?: (prompt: string) => void;
 }
 
 export function ChatDeliverable({
@@ -138,6 +145,7 @@ export function ChatDeliverable({
   onRegenerate,
   hideHeader = false,
   reasoningContent,
+  onSendPrompt,
 }: ChatDeliverableProps) {
   const copyId = typeof turnIndex === "number" ? `turn-res-${turnIndex}` : "final-result";
 
@@ -270,7 +278,14 @@ export function ChatDeliverable({
           wrap in prose styling. */}
       {status !== "failed" && status !== "stopped" && (
         <div className="p-4 rounded-md bg-card/40 text-foreground text-sm leading-relaxed">
-          <MarkdownRenderer content={displayContent} />
+          {/* v3: `onSendPrompt` is forwarded to CardRuntimeContext so
+              prompt-action buttons on ```ui cards dispatch a new
+              message. Passed only here — the error branch below
+              never contains cards. */}
+          <MarkdownRenderer
+            content={displayContent}
+            onSendPrompt={onSendPrompt}
+          />
         </div>
       )}
 

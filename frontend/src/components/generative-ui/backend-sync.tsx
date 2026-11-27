@@ -23,7 +23,12 @@
 
 import { useEffect, useRef } from "react";
 import { useGenerativeUIStore, getRenderingSettings } from "./store";
-import type { RenderingSettings, RenderingTelemetry } from "./types";
+import {
+  DEFAULT_FEATURES,
+  DEFAULT_LIMITS,
+  type RenderingSettings,
+  type RenderingTelemetry,
+} from "./types";
 
 const SETTINGS_URL = "/api/config/generative-ui";
 const TELEMETRY_URL = "/api/config/generative-ui-telemetry";
@@ -39,9 +44,15 @@ function settingsEqual(a: RenderingSettings, b: RenderingSettings): boolean {
     a.features.latex === b.features.latex &&
     a.features.charts === b.features.charts &&
     a.features.code_highlighting === b.features.code_highlighting &&
+    // v3: cards feature flags participate in equality. Without these,
+    // toggling either one would not trigger a debounced POST, and the
+    // server-side directive would keep the old value.
+    a.features.cards === b.features.cards &&
+    a.features.cards_auto_images === b.features.cards_auto_images &&
     a.limits.max_mermaid_nodes === b.limits.max_mermaid_nodes &&
     a.limits.max_chart_points === b.limits.max_chart_points &&
     a.limits.max_table_rows === b.limits.max_table_rows &&
+    a.limits.max_cards === b.limits.max_cards &&
     a.limits.max_output_tokens === b.limits.max_output_tokens
   );
 }
@@ -53,6 +64,10 @@ function telemetryEqual(a: RenderingTelemetry, b: RenderingTelemetry): boolean {
     a.mermaidErrors === b.mermaidErrors &&
     a.chartErrors === b.chartErrors &&
     a.latexErrors === b.latexErrors &&
+    // v3: cardErrors. Omitting this would let a card failure increment
+    // `totalRenders` locally but never propagate to the backend, so the
+    // persisted counter would drift from the UI on the next page load.
+    a.cardErrors === b.cardErrors &&
     a.lastRenderLatencyMs === b.lastRenderLatencyMs
   );
 }
@@ -76,10 +91,26 @@ export function GenerativeUIBackendSync(): null {
         };
         if (cancelled || !body?.ok || !body.settings) return;
         const s = body.settings;
+        // v3: merge with local defaults so any field the server does not
+        // know about yet (e.g. `cards`, `cards_auto_images`, `max_cards`
+        // on an installation whose on-disk settings predate this release)
+        // is filled in locally instead of being set to `undefined`.
+        //
+        // Without the merge, the first hydrate after upgrade would leave
+        // `features.cards` as `undefined`, `recordError("card")` would
+        // produce `NaN` in `totalRenders`, and the settings tab would
+        // render every new toggle as unchecked regardless of the
+        // server-side value.
         useGenerativeUIStore.setState({
           enabled: typeof s.enabled === "boolean" ? s.enabled : undefined,
-          features: s.features ?? undefined,
-          limits: s.limits ?? undefined,
+          features: {
+            ...DEFAULT_FEATURES,
+            ...(s.features ?? {}),
+          },
+          limits: {
+            ...DEFAULT_LIMITS,
+            ...(s.limits ?? {}),
+          },
           max_retries:
             typeof s.max_retries === "number" ? s.max_retries : undefined,
         } as any);
@@ -114,6 +145,10 @@ export function GenerativeUIBackendSync(): null {
             mermaidErrors: t.mermaidErrors ?? 0,
             chartErrors: t.chartErrors ?? 0,
             latexErrors: t.latexErrors ?? 0,
+            // v3: fall back to 0 when the persisted file predates this
+            // field (e.g. a fresh install, or an upgrade from an older
+            // release that did not have cardErrors on disk).
+            cardErrors: t.cardErrors ?? 0,
             lastRenderLatencyMs: t.lastRenderLatencyMs ?? 0,
           },
         });

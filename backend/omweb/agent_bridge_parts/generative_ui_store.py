@@ -52,12 +52,20 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "latex": True,
         "charts": True,
         "code_highlighting": True,
+        # New in v3: UI cards block (fenced ```ui JSON) and auto-image search.
+        # Both default to False because they change the assistant's output
+        # shape and (for cards_auto_images) can spend the search provider
+        # quota without an explicit user click.
+        "cards": False,
+        "cards_auto_images": False,
     },
     "limits": {
         "max_mermaid_nodes": 40,
         "max_chart_points": 30,
         "max_table_rows": 50,
         "max_output_tokens": 4096,
+        # Upper bound on cards emitted inside a single ```ui block.
+        "max_cards": 6,
     },
     "max_retries": 1,
 }
@@ -68,8 +76,20 @@ _MIN_RETRIES = 0
 _MAX_RETRIES = 5
 _MAX_PER_FORMAT_LIMIT = 500
 
-_FEATURE_KEYS = ("mermaid", "latex", "charts", "code_highlighting")
-_PER_FORMAT_LIMIT_KEYS = ("max_mermaid_nodes", "max_chart_points", "max_table_rows")
+_FEATURE_KEYS = (
+    "mermaid",
+    "latex",
+    "charts",
+    "code_highlighting",
+    "cards",
+    "cards_auto_images",
+)
+_PER_FORMAT_LIMIT_KEYS = (
+    "max_mermaid_nodes",
+    "max_chart_points",
+    "max_table_rows",
+    "max_cards",
+)
 
 _lock = threading.RLock()
 

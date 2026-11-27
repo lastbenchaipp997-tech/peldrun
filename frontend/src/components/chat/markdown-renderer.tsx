@@ -37,6 +37,20 @@ import { useGenerativeUIStore } from "@/components/generative-ui/store";
 import { PeldrunDiagram } from "@/components/generative-ui/catalog/PeldrunDiagram";
 import { PeldrunChartBlock } from "@/components/generative-ui/catalog/PeldrunChartBlock";
 import { PeldrunPlainText } from "@/components/generative-ui/catalog/PeldrunPlainText";
+// v3: UI cards. `PeldrunCardBlock` renders a ```ui fenced JSON block;
+// `CardRuntimeContext` carries the image resolvers and prompt handler
+// that the block consumes. `buildGalleryIndex` / `normalizeQueryKey`
+// build the byRef/byQuery lookup tables from the persisted
+// ```image_gallery block, so `image.ref` and `image.query` resolve
+// without extra network round-trips (and survive page refresh).
+import {
+  PeldrunCardBlock,
+  CardRuntimeContext,
+} from "@/components/generative-ui/catalog/PeldrunCardBlock";
+import {
+  buildGalleryIndex,
+  normalizeQueryKey,
+} from "@/components/generative-ui/catalog/galleryRefs";
 
 // ---------------------------------------------------------------------------
 // Public props
@@ -45,6 +59,14 @@ import { PeldrunPlainText } from "@/components/generative-ui/catalog/PeldrunPlai
 export interface MarkdownRendererProps {
   content: string;
   className?: string;
+  /**
+   * v3: Callback invoked when the user clicks a "prompt" action on a
+   * ```ui card. Receives the raw prompt string the model put on the
+   * action. When omitted, prompt-only card actions are hidden; `href`
+   * actions still open the link. The parent typically wires this to
+   * the chat composer's submit handler.
+   */
+  onSendPrompt?: (prompt: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +153,7 @@ function canonicalizeLanguage(raw: string | undefined): string {
 function MarkdownRendererInner({
   content,
   className = "",
+  onSendPrompt,
 }: MarkdownRendererProps): React.JSX.Element | null {
   const [mounted, setMounted] = useState(false);
   const features = useGenerativeUIStore((s) => s.features);
@@ -140,9 +163,40 @@ function MarkdownRendererInner({
     setMounted(true);
   }, []);
 
+  // v3: lookup tables for the current message. Both are rebuilt only
+  // when `content` changes, so re-renders caused by the elapsed-timer
+  // in the chat container do not re-parse the gallery block.
+  const galleryIndex = useMemo(() => buildGalleryIndex(content), [content]);
+
+  // v3: runtime handed to every PeldrunCardBlock. `sendPrompt` is
+  // optional; when the host does not supply it, prompt-only actions
+  // are hidden by the block (see PeldrunCardBlock.UiCard). Image
+  // resolvers fall back to `null` when a ref/query is unknown, and
+  // the block degrades gracefully (no image, card still renders).
+  const cardRuntime = useMemo(
+    () => ({
+      resolveImage: (ref: string) => galleryIndex.byRef[ref] ?? null,
+      resolveImageByQuery: (q: string) =>
+        galleryIndex.byQuery[normalizeQueryKey(q)] ?? null,
+      sendPrompt: onSendPrompt,
+    }),
+    [galleryIndex, onSendPrompt],
+  );
+
+  // v3: `cards` and `cards_auto_images` default to FALSE in the
+  // pre-mount fallback. An unhydrated first render must never emit card
+  // markup that the server-side prompt did not enable. The real values
+  // arrive via the store subscription once `mounted` flips true.
   const effectiveFeatures = mounted
     ? features
-    : { mermaid: true, latex: true, charts: true, code_highlighting: true };
+    : {
+        mermaid: true,
+        latex: true,
+        charts: true,
+        code_highlighting: true,
+        cards: false,
+        cards_auto_images: false,
+      };
 
   const effectiveEnabled = mounted ? enabled : true;
 
@@ -192,6 +246,7 @@ function MarkdownRendererInner({
     <div
       className={`prose prose-sm dark:prose-invert max-w-none break-words leading-relaxed text-black ${className}`}
     >
+      <CardRuntimeContext.Provider value={cardRuntime}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
@@ -231,6 +286,18 @@ function MarkdownRendererInner({
               return <CodeBlock code={rawCode} language="json" />;
             }
 
+            // v3: ```ui blocks. The model emits these only when the
+            // `cards` feature is enabled server-side; the client mirrors
+            // the gate so a stale prompt never renders cards the user
+            // disabled. When the feature is off, the raw JSON is shown as
+            // a plain code block so no content is silently dropped.
+            if (language === "ui") {
+              if (effectiveEnabled && effectiveFeatures.cards) {
+                return <PeldrunCardBlock source={rawCode} />;
+              }
+              return <CodeBlock code={rawCode} language="json" />;
+            }
+
             // Special block emitted by use-sse-stream in chat mode.
             // The backend's structured image_results payload is
             // embedded as JSON inside this fenced block, and we
@@ -239,6 +306,21 @@ function MarkdownRendererInner({
             if (language === "image_gallery") {
               try {
                 const parsed = JSON.parse(rawCode);
+                // v3: when the model used `image.ref` (or the backend
+                // resolved `image.query`) inside ```ui cards, the
+                // dispatcher sets `used_in_cards: true` on the gallery
+                // payload. In that case the inline gallery is hidden
+                // and the pictures appear inside the card layouts
+                // instead. The `byRef`/`byQuery` tables are still
+                // built by the `galleryIndex` memo above, so the cards
+                // can resolve them.
+                if (
+                  parsed?.used_in_cards &&
+                  effectiveEnabled &&
+                  effectiveFeatures.cards
+                ) {
+                  return null;
+                }
                 const images = Array.isArray(parsed?.images)
                   ? parsed.images
                   : [];
@@ -483,6 +565,7 @@ function MarkdownRendererInner({
       >
         {processed}
       </ReactMarkdown>
+      </CardRuntimeContext.Provider>
     </div>
   );
 }

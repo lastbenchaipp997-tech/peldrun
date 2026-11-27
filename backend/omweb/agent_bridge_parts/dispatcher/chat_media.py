@@ -169,12 +169,16 @@ def inject_image_attachments(
         )
 
 
-def append_image_gallery_block(
+async def append_image_gallery_block(
     result_text: str,
     images: Optional[List[Dict[str, Any]]],
     query: str,
     provider: str,
     job_id: str,
+    *,
+    chat_id: str = "",
+    project_id: str = "",
+    active_llm: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Append a fenced ``image_gallery`` block to the persisted result text.
@@ -184,25 +188,83 @@ def append_image_gallery_block(
     the result markdown lets the frontend's MarkdownRenderer rebuild the
     gallery from persisted history.
 
+    v3: When ``cards_auto_images`` is enabled, this function ALSO resolves
+    the ``image.query`` strings emitted by the model inside ```ui blocks
+    BEFORE serializing the gallery. Resolved images are appended to
+    ``gallery_images`` and recorded in ``query_map`` so the frontend can
+    map a card's ``image.query`` to a concrete image. Resolution is
+    bounded (see ``card_images``) and happens AFTER the model's text is
+    complete but BEFORE the ``final`` SSE event — so the frontend sees
+    cards without images while streaming, then the full set at ``final``.
+
     ``ensure_ascii=False`` is deliberate: image titles are frequently
     non-Latin and escaping them would bloat the payload and break the
     renderer's title display.
 
-    Returns ``result_text`` unchanged when there are no images or when
+    Returns ``result_text`` unchanged when there are no images (neither
+    from the manual search nor from the auto-image resolution) or when
     serialization fails.
     """
-    if not images:
+    # v3: start from the caller's gallery so card resolution can append
+    # to it. Using `or []` here (rather than an early `return`) is what
+    # lets cards_auto_images populate the gallery even when the user did
+    # NOT press the manual search button.
+    gallery_images: List[Dict[str, Any]] = list(images or [])
+    gallery_query_map: Dict[str, int] = {}
+    used_in_cards: bool = False
+
+    try:
+        from peldrun.context.generative_ui import (
+            cards_auto_images_enabled,
+            cards_enabled,
+        )
+
+        # Two-dot import: chat_media is in `agent_bridge_parts/dispatcher/`,
+        # card_images lives one level up in `agent_bridge_parts/`.
+        from ..card_images import resolve_card_images, uses_card_refs
+
+        _genui = (active_llm or {}).get("generative_ui")
+
+        if cards_auto_images_enabled(_genui):
+            # Full resolution path: the model may have written image.query
+            # for cards that need a photo lookup. Bounded by card_images.
+            gallery_images, gallery_query_map, used_in_cards = (
+                await resolve_card_images(
+                    result_text,
+                    gallery_images,
+                    run_id=job_id,
+                    job_id=job_id,
+                    chat_id=chat_id,
+                    project_id=project_id,
+                )
+            )
+        elif cards_enabled(_genui):
+            # Ref-only path: no search allowed, but we still need to know
+            # whether the model actually used the gallery refs so the
+            # frontend can hide the gallery when it did.
+            used_in_cards = uses_card_refs(result_text)
+    except Exception as exc:
+        logger.warning(
+            "[CARD-IMAGES] skipped for job %s: %s", job_id, exc,
+        )
+
+    if not gallery_images:
         return result_text
+
     try:
         import json as _json_mod
-        _gallery_payload = _json_mod.dumps(
-            {
-                "images": images,
-                "query": query,
-                "provider": provider,
-            },
-            ensure_ascii=False,
-        )
+        _gallery: Dict[str, Any] = {
+            "images": gallery_images,
+            "query": query,
+            "provider": provider,
+        }
+        if gallery_query_map:
+            _gallery["query_map"] = gallery_query_map
+        if used_in_cards:
+            # The frontend hides the gallery when this flag is set but
+            # keeps `query_map` / `byRef` available for card resolution.
+            _gallery["used_in_cards"] = True
+        _gallery_payload = _json_mod.dumps(_gallery, ensure_ascii=False)
         return (
             result_text
             + f"\n\n```image_gallery\n{_gallery_payload}\n```\n"
