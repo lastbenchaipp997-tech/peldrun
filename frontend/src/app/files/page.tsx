@@ -640,7 +640,7 @@ export default function StorageArtifactsHubPage() {
                   return (
                     <div
                       key={item.path}
-                      className="group flex flex-col justify-between rounded-xl border border-border bg-muted hover:border-primary/50 transition-all shadow-sm overflow-hidden"
+                      className="group flex flex-col justify-end rounded-xl border border-border bg-muted hover:border-primary/50 transition-all shadow-sm overflow-hidden"
                     >
                       {/* Image Preview Card */}
                       {isImage && (
@@ -699,14 +699,14 @@ export default function StorageArtifactsHubPage() {
                             )}
                             <Eye size={13} className="text-muted-foreground group-hover:text-primary transition" />
                           </div>
-                          <div className="font-mono text-[11px] text-[#ccc] line-clamp-3 bg-darkest p-2 rounded border border-border/50">
+                          <div className="font-mono text-[11px] text-black line-clamp-3 bg-orange-100 p-2 rounded border border-border/50">
                             Click to inspect source code and syntax...
                           </div>
                         </div>
                       )}
 
                       {/* Details & Actions */}
-                      <div className="p-3 flex items-center justify-between gap-2 bg-darkest text-[#ffffff]">
+                      <div className="p-3 flex items-center justify-between gap-2 bg-custom text-black">
                         <div className="min-w-0 flex items-center gap-2">
                           {fileIconName ? (
                             <Icon name={fileIconName} size={8} className="shrink-0" />
@@ -718,10 +718,10 @@ export default function StorageArtifactsHubPage() {
                             <FileCode size={8} className="text-primary shrink-0" />
                           )}
                           <div className="truncate">
-                            <div className="text-xs font-mono font-medium text-[#ffffff] truncate" title={item.name}>
+                            <div className="text-xs font-mono font-medium text-black truncate" title={item.name}>
                               {item.name}
                             </div>
-                            <div className="flex items-center gap-2 text-[10px] text-[#eee] font-mono">
+                            <div className="flex items-center gap-2 text-[10px] text-black/80 font-mono">
                               <span>{formatSize(item.size)}</span>
                               {item.origin && (
                                 <span className="px-1.5 py-0.2 rounded bg-amber-200/20  text-[9px]">

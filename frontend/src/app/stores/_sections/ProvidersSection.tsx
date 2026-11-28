@@ -349,7 +349,7 @@ function CatalogItemCard({
 
         <div className="min-w-0 flex-1">
           {/* Title + badges row */}
-          <div className="flex items-center gap-2 flex-wrap mb-1">
+          <div className="flex items-center gap-2 flex-wrap mb-3 mt-3">
             <h3
               className="truncate text-sm font-semibold text-foreground"
               title={displayName}
@@ -379,7 +379,7 @@ function CatalogItemCard({
 
           {/* Description */}
           <p
-            className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"
+            className="line-clamp-2 text-[12px] leading-relaxed text-muted-foreground mb-3"
             title={item.description}
           >
             {item.description?.trim() || "No description provided."}
@@ -388,7 +388,7 @@ function CatalogItemCard({
           {/* Permission warnings (if any) */}
           {item.permission_warnings && item.permission_warnings.length > 0 && (
             <div className="mt-2">
-              <div className="flex items-start gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5">
+              <div className="flex items-start gap-1.5 rounded-sm border border-amber-500/10 bg-muted px-2 py-1.5 mb-3">
                 <Shield className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
                 <p className="text-[10px] leading-relaxed text-amber-900/80 dark:text-amber-200/70">
                   {item.permission_warnings[0]}
@@ -436,7 +436,7 @@ function CatalogItemCard({
                 className={[
                   "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
                   canInstall
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer"
+                    ? "bg-rb text-primary-foreground hover:bg-primary/90 cursor-pointer"
                     : "cursor-not-allowed border bg-muted text-muted-foreground",
                 ].join(" ")}
                 title={`Update from v${installState.installedVersion} to v${item.version}`}

@@ -1185,30 +1185,251 @@ export interface SkillCatalogRefreshResponse {
 }
 
 /**
- * Terminal result of a catalog install, as consumed by
- * ``CatalogSkillInstallModal``.
- *
- * The modal is a self-contained UI component: it does not know
- * about ``useSkillActions``, does not call any API, and does not
- * touch the cache. It only receives:
- *
- *   - ``item``: what is being installed (from the catalog list)
- *   - ``result``: either ``null`` (still running), a success
- *     payload, or a failure payload with the raw backend error.
- *
- * The caller (``useSkillActions``) is responsible for invoking
- * ``installSkillFromCatalog``, translating its result (or thrown
- * ``SkillCatalogApiError``) into this discriminated union, and
- * clearing it when the modal closes.
- *
- * This separation means the modal's progress UI is provably
- * independent of the API client: the same modal would work against
- * any synchronous install endpoint.
- */
+Terminal result of a catalog install, as consumed by
+`CatalogSkillInstallModal`.
+
+The modal is a self-contained UI component: it does not know
+about `useSkillActions`, does not call any API, and does not
+touch the cache. It only receives:
+
+`item`: what is being installed (from the catalog list)
+`result`: either `null` (still running), a success
+  payload, or a failure payload with the raw backend error.
+
+The caller (`useSkillActions`) is responsible for invoking
+`installSkillFromCatalog`, translating its result (or thrown
+`SkillCatalogApiError`) into this discriminated union, and
+clearing it when the modal closes.
+
+This separation means the modal's progress UI is provably
+independent of the API client: the same modal would work against
+any synchronous install endpoint.
+*/
 export type CatalogSkillInstallResult =
   | {
       success: true;
       skillId: string;
+      version: string;
+      name: string;
+    }
+  | {
+      success: false;
+      error: string;
+      code?: string;
+    };
+
+// ─────────────────────────────────────────────────────────────────
+// Agent Catalog
+// ─────────────────────────────────────────────────────────────────
+//
+// Types mirror the HTTP responses from `omweb.routers.store_rtr`:
+//
+//   GET  /api/store/agents/catalog                    → AgentCatalogListResponse
+//   GET  /api/store/agents/catalog/{item_id}          → { status, item }
+//   POST /api/store/agents/catalog/refresh            → AgentCatalogRefreshResponse
+//   POST /api/store/agents/catalog/{item_id}/install  → AgentCatalogInstallResponse
+//
+// The shape is deliberately parallel to `SkillCatalogItem` /
+// `ProviderCatalogItem` so the store sections can share card/modal
+// UX patterns without a shared abstract type.
+
+/**
+One catalog item describing an installable agent.
+Returned by `GET /api/store/agents/catalog`. The `installable` and
+`installability_reason` fields are computed server-side at load
+time; the rest are declarative metadata from the catalog source
+(builtin JSON, remote GitHub Pages, or a local override file).
+
+Install requires BOTH `download_url` AND `checksum_sha256`.
+Missing either -> preview-only: the card shows a "Preview" button
+and the modal cannot start the download.
+
+Why every catalog field is optional except the identity trio
+(`id` / `name` / `version`): the builtin catalog ships
+preview-only entries with no JSON, and future catalog authors may
+publish less metadata than the backend Pydantic model allows.
+The backend never rejects a missing optional field -- it computes
+`installable = false` and the UI disables the Install button.
+*/
+export interface AgentCatalogItem {
+  // -- Identity ---------------------------------------------------
+  id: string;
+  name: string;
+  display_name: string | null;
+  description: string;
+  version: string;
+
+  // -- Source -----------------------------------------------------
+  download_url: string | null;
+  checksum_sha256: string | null;
+
+  // -- Branding ---------------------------------------------------
+  /** Primary brand color as a hex string (e.g. `"#1a1a33"`). */
+  brand_color?: string | null;
+  /**
+   * Icon payload. When `icon_type === "name"`, this is the base
+   * name of a Lucide icon. When `icon_type === "svg"`,
+   * this is the full inline SVG markup (sanitized before rendering).
+   */
+  icon?: string | null;
+  /** How to interpret `icon`. Defaults to `"name"`. */
+  icon_type?: "name" | "svg";
+
+  // -- Publisher --------------------------------------------------
+  author: string | null;
+  author_url?: string | null;
+  homepage: string | null;
+  /**
+   * Structured developer metadata. Preferred over `author` /
+   * `author_url`. When present, the UI renders the richer
+   * publisher block in the details modal.
+   */
+  developer?: DeveloperInfo | null;
+  /** Source repository URL (GitHub, GitLab, ...). */
+  repository_url?: string | null;
+  /** SPDX license identifier (e.g. `"MIT"`, `"Apache-2.0"`). */
+  license?: string | null;
+  /** Documentation URL. */
+  docs_url?: string | null;
+
+  // -- Discovery --------------------------------------------------
+  tags: string[];
+
+  // -- Trust & Stability ------------------------------------------
+  trust: "verified" | "community" | "unverified";
+  stability: "experimental" | "beta" | "stable" | "deprecated";
+  release_date?: string | null;
+  deprecation_message?: string | null;
+
+  // -- Install-time warnings --------------------------------------
+  /**
+   * Advisory strings shown in the install confirmation dialog.
+   * Examples:
+   *   "This agent requires the source_control tool."
+   *   "This agent is deprecated. Consider installing X instead."
+   * Populated by the catalog author in `catalog.json`. The UI
+   * never infers these -- if the array is empty, no warning is
+   * shown.
+   */
+  install_warnings: string[];
+
+  // -- Computed by backend ----------------------------------------
+  /** True iff both `download_url` and a valid SHA-256 are present. */
+  installable: boolean;
+  /** Human-readable explanation rendered verbatim as a button tooltip. */
+  installability_reason: string;
+
+// -- Install state (provided by backend) -----------------------
+// The backend returns snake_case fields; this type mirrors that
+// exact shape so the API response maps 1:1 without transformation.
+install_state?: AgentCatalogBackendInstallState;
+}
+
+/**
+Install state as returned by the backend in each catalog item's
+`install_state` field. Uses snake_case to match the Python
+`_agent_catalog_install_state()` response verbatim.
+
+This is distinct from `AgentCatalogInstallState` (camelCase) which
+is the frontend-computed shape used by `computeInstallState()` and
+consumed by the card/modal components.
+*/
+export interface AgentCatalogBackendInstallState {
+  is_installed: boolean;
+  installed_version: string | null;
+  has_update: boolean;
+  is_builtin: boolean;
+  blocked_reason: string | null;
+}
+
+/**
+Derived state computed by the UI at render time, by matching an
+`AgentCatalogItem` against the installed `agents` array.
+
+Parallel to `SkillCatalogInstallState` and `ProviderCatalogInstallState`.
+The card and the install modal use this struct to decide which
+button to render (Install / Update / View Installed) and which
+badges to show.
+
+Matching rule:
+`catalogItem.id === installedAgent.id`.
+Both sides are normalized to PELDRUN's canonical form (lowercase
+snake_case). The backend normalizes catalog item IDs so an author
+using `code-review` in the catalog still matches an installed
+`code_review` agent.
+*/
+export interface AgentCatalogInstallState {
+  /** Whether a matching agent is currently installed. */
+  isInstalled: boolean;
+  /** Whether the matching agent is active (`status === "active"`). */
+  isEnabled: boolean;
+  /** Installed version, or `null` when not installed. */
+  installedVersion: string | null;
+  /**
+   * The full installed agent manifest, or `null`. Kept on the
+   * struct so the card can pass it directly to `onOpenInstalled` /
+   * `onDelete` without a second lookup.
+   */
+  installedAgent: any | null;
+}
+
+/**
+Response body of `GET /api/store/agents/catalog`.
+The `catalog_status` block is optional on the wire -- the backend
+always includes it today, but a future proxy or mock could omit
+it without breaking the client (the frontend only reads it for
+debugging, never for branching).
+*/
+export interface AgentCatalogListResponse {
+  status: string;
+  items: AgentCatalogItem[];
+  total: number;
+  catalog_status?: {
+    enabled: boolean;
+    item_count: number;
+    builtin_count: number;
+    custom_count: number;
+    remote_count: number;
+    remote_url_configured: boolean;
+    remote_url_effective: string | null;
+    remote_cache_age_seconds: number | null;
+    remote_last_error: string | null;
+  };
+}
+
+/**
+Response body of `POST /api/store/agents/catalog/refresh`.
+`status === "error"` when the remote fetch failed but the
+builtin catalog is still available -- the UI should surface
+`message` as a warning toast and keep the current items
+(the backend does not clear them on failure).
+*/
+export interface AgentCatalogRefreshResponse {
+  status: "success" | "error";
+  refreshed: boolean;
+  catalog_status?: AgentCatalogListResponse["catalog_status"];
+}
+
+/**
+Terminal result of an agent catalog install, as consumed by
+`CatalogAgentInstallModal`.
+
+The modal is a self-contained UI component: it does not know
+about `useAgentActions`, does not call any API, and does not
+touch the cache. It only receives:
+
+`item`: what is being installed (from the catalog list)
+`result`: either `null` (still running), a success
+  payload, or a failure payload with the raw backend error.
+
+The caller (`useAgentActions`) is responsible for invoking
+`installAgentFromCatalog`, translating its result into this
+discriminated union, and clearing it when the modal closes.
+*/
+export type CatalogAgentInstallResult =
+  | {
+      success: true;
+      agentId: string;
       version: string;
       name: string;
     }

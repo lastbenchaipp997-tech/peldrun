@@ -883,6 +883,140 @@ class AgentRegistry:
 
         return agent
 
+
+    def install_catalog_agent(self, agent_data: Dict[str, Any], source: str = "catalog") -> Dict[str, Any]:
+        """
+        Install an agent manifest downloaded from the catalog.
+
+        The catalog package is strictly a single JSON file. This method:
+          1. Validates required structural fields (id, system_prompt).
+          2. Extracts inline SVG icons into the shared icons directory.
+          3. Persists the manifest atomically into custom_dir.
+
+        Icon handling:
+          - When ``icon_type == "svg"``: the inline SVG is sanitized and
+            written to ``custom_dir/icons/{agent_id}.svg``, then the
+            manifest's ``icon`` field is replaced with the filename so
+            the existing ``get_agent_icon`` endpoint resolves it via
+            candidate path #4 (custom_dir/icons/{agent_id}.svg).
+          - When ``icon_type == "name"`` (Lucide): the icon name is kept
+            as-is; no file is written. The endpoint falls through to the
+            Lucide SVG generator.
+          - When ``icon_type`` is absent: legacy behaviour, icon field
+            is preserved unchanged.
+        """
+        import re as _re
+
+        if not isinstance(agent_data, dict):
+            raise ValueError("Agent data must be a dictionary.")
+
+        agent_id = agent_data.get("id")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Agent manifest must declare a non-empty 'id' field.")
+
+        system_prompt = agent_data.get("system_prompt")
+        if not isinstance(system_prompt, str) or not system_prompt.strip():
+            raise ValueError("Agent manifest must declare a non-empty 'system_prompt'.")
+
+        # Normalize ID to filesystem-safe canonical form
+        safe_id = agent_id.strip().lower().replace(" ", "_")
+        safe_id = _re.sub(r"[^a-z0-9_\-]", "", safe_id)
+        if not safe_id:
+            raise ValueError(f"Agent ID '{agent_id}' sanitizes to empty string.")
+        # ── Root-level guard: reject builtin id collision ────────────
+        # The router also checks this (409), but the registry is the
+        # authoritative gate — a direct call bypassing the HTTP layer
+        # must still be blocked.
+        if safe_id in self._builtin_agents:
+            raise ValueError(
+                f"Agent id '{safe_id}' is reserved by a built-in system "
+                f"agent and cannot be overwritten by a catalog package."
+            )
+
+        # ── Icon extraction ─────────────────────────────────────────
+        icon_type = agent_data.get("icon_type", "name")
+        icon_value = (agent_data.get("icon") or "").strip()
+
+        if icon_type == "svg" and icon_value:
+            # Sanitize: strip script tags, event handlers, dangerous URLs
+            safe_svg = self._sanitize_svg(icon_value)
+            if safe_svg:
+                icons_dir = self.custom_dir / "icons"
+                icons_dir.mkdir(parents=True, exist_ok=True)
+                icon_filename = f"{safe_id}.svg"
+                icon_path = icons_dir / icon_filename
+                icon_path.write_text(safe_svg, encoding="utf-8")
+                # Replace inline SVG with filename reference
+                agent_data["icon"] = icon_filename
+            else:
+                # Sanitization rejected the SVG; fall back to Bot icon
+                agent_data["icon"] = "Bot"
+        # For "name" type or absent icon_type, keep icon field as-is
+
+        # Remove catalog-only transport fields before persisting
+        agent_data.pop("icon_type", None)
+
+        # ── Standard manifest fields ────────────────────────────────
+        agent_data["id"] = safe_id
+        agent_data["is_builtin"] = False
+        agent_data.setdefault("status", "active")
+        agent_data["source"] = source
+
+        target = self.custom_dir / f"{safe_id}.json"
+
+        # Atomic write to prevent corruption on crash
+        tmp = target.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(agent_data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(target)
+
+        logger.info(
+            "Catalog agent '%s' installed (source=%s, icon_type=%s).",
+            safe_id, source, icon_type,
+        )
+        return agent_data
+
+    @staticmethod
+    def _sanitize_svg(raw: str) -> Optional[str]:
+        """
+        Sanitize an inline SVG string to prevent XSS when served
+        to the browser. Mirrors the frontend sanitizer in
+        CatalogSkillCard.tsx as defense-in-depth.
+
+        Strips:
+          - <script> blocks
+          - <foreignObject> subtrees
+          - Event handler attributes (onclick, onload, ...)
+          - javascript: / data: URLs in href/xlink:href/src
+          - @import directives in CSS
+
+        Returns None if the input does not contain a valid <svg> tag.
+        """
+        import re as _re
+
+        trimmed = raw.strip()
+        if "<svg" not in trimmed.lower():
+            return None
+
+        sanitized = trimmed
+        # Remove <script>...</script>
+        sanitized = _re.sub(r"<script[\s\S]*?</script>", "", sanitized, flags=_re.IGNORECASE)
+        # Remove <foreignObject>...</foreignObject>
+        sanitized = _re.sub(r"<foreignObject[\s\S]*?</foreignObject>", "", sanitized, flags=_re.IGNORECASE)
+        # Remove event handler attributes (on*)
+        sanitized = _re.sub(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", sanitized, flags=_re.IGNORECASE)
+        # Remove javascript:/data: URLs
+        sanitized = _re.sub(
+            r"(href|xlink:href|src)\s*=\s*(\"javascript:[^\"]*\"|'javascript:[^']*'|\"data:[^\"]*\"|'data:[^']*')",
+            "", sanitized, flags=_re.IGNORECASE,
+        )
+        # Remove @import url(...)
+        sanitized = _re.sub(r"@import\s+url\s*\([^)]*\)", "", sanitized, flags=_re.IGNORECASE)
+
+        return sanitized
+
     def create_custom_agent(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create and persist a new custom agent manifest."""
         name = data.get("name", "Custom Agent").strip()

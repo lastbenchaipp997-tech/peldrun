@@ -203,13 +203,13 @@ function FeatureChips({ features }: { features: Record<string, boolean> }) {
   const hidden = enabled.length - shown.length;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5 mb-3">
       {shown.map((chip) => {
         const Icon = chip.icon;
         return (
           <span
             key={chip.key}
-            className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+            className="inline-flex items-center gap-1 rounded-md bg-muted shadow-sm px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
           >
             <Icon className="h-3 w-3" />
             {chip.label}
@@ -512,7 +512,7 @@ export function ProviderPackageCard({
 
         <div className="min-w-0 flex-1">
           {/* Title + badges row */}
-          <div className="flex items-center gap-2 flex-wrap mb-1">
+          <div className="flex items-center gap-2 flex-wrap mt-3 mb-3 ">
             <h3
               className="truncate text-sm font-semibold text-foreground"
               title={displayName}
@@ -567,7 +567,7 @@ export function ProviderPackageCard({
 
           {/* Description */}
           <p
-            className="line-clamp-2 text-xs leading-relaxed text-muted-foreground"
+            className="line-clamp-2 text-[12px] leading-relaxed text-muted-foreground mb-3"
             title={description}
           >
             {description}

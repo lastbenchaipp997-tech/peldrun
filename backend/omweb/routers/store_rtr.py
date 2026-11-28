@@ -39,6 +39,7 @@ try:
 except ImportError:  # pragma: no cover - defensive fallback
     _JSONSCHEMA_AVAILABLE = False
 
+from omweb.agents.catalog import get_agent_catalog
 from omweb.agents.registry import AgentNotFoundError, agent_registry
 from omweb.extensions.bundle_manager import McpBundleError, mcp_bundle_manager
 from omweb.extensions.registry import extension_registry
@@ -79,6 +80,246 @@ class AgentUpsertRequest(BaseModel):
 @router.get("/agents")
 async def list_all_agents():
     return {"status": "ok", "agents": agent_registry.list_agents()}
+
+
+# ─────────────────────────────────────────────────────────────────
+# Agent Catalog — remote discovery & one-click install
+# ─────────────────────────────────────────────────────────────────
+#
+# ROUTE ORDERING CONTRACT: every literal segment under /agents
+# (e.g. "catalog") MUST be registered BEFORE the catch-all
+# `/agents/{agent_id}` route below. FastAPI matches in registration
+# order, so a later `/agents/catalog` would be swallowed by the
+# `{agent_id}` pattern and resolve as an agent lookup (404).
+#
+# Architecture note: the catalog is a *supplier* only. It writes a
+# manifest into custom_dir and nothing else. Ownership of the
+# conversation stays with the existing agent runtime, which reads
+# `get_effective_agent` exactly as before. No parallel execution
+# path is introduced here.
+
+
+def _agent_catalog_install_state(
+    item_id: str,
+    installed_map: Dict[str, Dict[str, Any]],
+    catalog_version: str,
+) -> Dict[str, Any]:
+    """Derive the install state of one catalog item.
+
+    ``installed_map`` is keyed by lowercased agent id and built from a
+    single ``list_agents()`` call so the endpoint performs one disk
+    scan regardless of catalog size.
+
+    Return shape::
+
+        {
+          "is_installed": bool,
+          "installed_version": str | None,
+          "has_update": bool,
+          "is_builtin": bool,
+          "blocked_reason": str | None,
+        }
+
+    ``is_builtin`` marks an id collision with a system agent. Such an
+    item is never installable: ``list_agents`` processes custom
+    manifests after built-ins and would otherwise let a catalog
+    package shadow a sovereign system persona.
+    """
+    installed = installed_map.get(item_id.lower())
+    if installed is None:
+        return {
+            "is_installed": False,
+            "installed_version": None,
+            "has_update": False,
+            "is_builtin": False,
+            "blocked_reason": None,
+        }
+
+    is_builtin = bool(installed.get("is_builtin", False))
+    installed_version = installed.get("version")
+    installed_version_str = (
+        str(installed_version) if installed_version is not None else None
+    )
+
+    return {
+        "is_installed": True,
+        "installed_version": installed_version_str,
+        "has_update": (
+            not is_builtin
+            and installed_version_str is not None
+            and installed_version_str != catalog_version
+        ),
+        "is_builtin": is_builtin,
+        "blocked_reason": (
+            "This id is reserved by a built-in system agent and cannot "
+            "be overwritten by a catalog package."
+            if is_builtin
+            else None
+        ),
+    }
+
+
+def _build_installed_agents_map() -> Dict[str, Dict[str, Any]]:
+    """Index installed agents by lowercased id (single disk scan)."""
+    try:
+        agents = agent_registry.list_agents()
+    except Exception:
+        return {}
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for agent in agents:
+        aid = agent.get("id")
+        if isinstance(aid, str) and aid:
+            indexed[aid.lower()] = agent
+    return indexed
+
+
+@router.get("/agents/catalog")
+async def list_agent_catalog() -> Dict[str, Any]:
+    """Return the merged agent catalog with derived install state.
+
+    Serves the builtin baseline immediately and refreshes the remote
+    overlay in the background of the same request (``ensure_fresh``
+    never raises and honours both the positive and negative TTL), so
+    an unreachable catalog host can never block this endpoint.
+    """
+    catalog = get_agent_catalog()
+    await catalog.ensure_fresh()
+
+    installed_map = _build_installed_agents_map()
+    items: List[Dict[str, Any]] = []
+    for item in catalog.list_items():
+        payload = item.model_dump()
+        state = _agent_catalog_install_state(
+            item.id, installed_map, item.version
+        )
+        # A reserved id downgrades the item to preview-only even when
+        # a download URL and checksum are published.
+        if state["is_builtin"]:
+            payload["installable"] = False
+            payload["installability_reason"] = state["blocked_reason"]
+        payload["install_state"] = state
+        items.append(payload)
+
+    return {
+        "status": "ok",
+        "items": items,
+        "total": len(items),
+        "catalog_status": catalog.get_status(),
+    }
+
+
+@router.get("/agents/catalog/status")
+async def get_agent_catalog_status() -> Dict[str, Any]:
+    """Return catalog cache/fetch diagnostics for operators."""
+    return {"status": "ok", "catalog_status": get_agent_catalog().get_status()}
+
+
+@router.post("/agents/catalog/refresh")
+async def refresh_agent_catalog() -> Dict[str, Any]:
+    """Force a remote fetch, bypassing both positive and negative TTL."""
+    catalog = get_agent_catalog()
+    ok = await catalog.refresh()
+    return {
+        "status": "ok",
+        "refreshed": ok,
+        "catalog_status": catalog.get_status(),
+    }
+
+
+@router.get("/agents/catalog/{item_id}")
+async def get_agent_catalog_item(item_id: str) -> Dict[str, Any]:
+    """Return a single catalog item with its derived install state."""
+    catalog = get_agent_catalog()
+    await catalog.ensure_fresh()
+
+    item = catalog.get_item(item_id)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent catalog item '{item_id}' not found",
+        )
+
+    payload = item.model_dump()
+    state = _agent_catalog_install_state(
+        item.id, _build_installed_agents_map(), item.version
+    )
+    if state["is_builtin"]:
+        payload["installable"] = False
+        payload["installability_reason"] = state["blocked_reason"]
+    payload["install_state"] = state
+    return {"status": "ok", "item": payload}
+
+
+@router.post("/agents/catalog/{item_id}/install")
+async def install_agent_from_catalog(item_id: str) -> Dict[str, Any]:
+    """Download, verify, and install one catalog agent.
+
+    The package is a single JSON manifest. Verification chain:
+      1. the item must exist and publish a download URL + SHA-256;
+      2. the id must not collide with a built-in system agent;
+      3. the download is size-capped and checksum-verified;
+      4. ``AgentRegistry.install_catalog_agent`` validates structure,
+         extracts any inline SVG into ``custom_dir/icons`` and writes
+         the manifest atomically.
+    """
+    catalog = get_agent_catalog()
+    item = catalog.get_item(item_id)
+    if item is None:
+        # Best-effort refresh so an item published moments ago is
+        # installable without waiting for the listing TTL to expire.
+        await catalog.ensure_fresh(force=True)
+        item = catalog.get_item(item_id)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent catalog item '{item_id}' not found",
+        )
+
+    state = _agent_catalog_install_state(
+        item.id, _build_installed_agents_map(), item.version
+    )
+    if state["is_builtin"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": state["blocked_reason"],
+                "code": "AGENT_CATALOG_ID_RESERVED",
+                "details": {"item_id": item.id},
+            },
+        )
+
+    if not item.installable:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": item.installability_reason,
+                "code": "AGENT_CATALOG_NOT_INSTALLABLE",
+                "details": {"item_id": item.id},
+            },
+        )
+
+    try:
+        installed = await catalog.install_from_catalog(item.id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": str(exc),
+                "code": "AGENT_CATALOG_INSTALL_FAILED",
+                "details": {"item_id": item.id},
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Agent install failed: {exc}",
+                "code": "AGENT_CATALOG_INSTALL_ERROR",
+                "details": {"item_id": item.id},
+            },
+        )
+
+    return {"status": "ok", "agent": installed}
 
 
 @router.get("/agents/{agent_id}")

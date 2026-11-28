@@ -81,11 +81,11 @@ REMOTE_CATALOG_MAX_BYTES = 2 * 1024 * 1024
 REMOTE_CATALOG_MAX_REDIRECTS = 3
 REMOTE_CATALOG_CACHE_SCHEMA_VERSION = 1
 
-# Timeout for the ZIP download itself. Agents can be larger than skills,
-# so 50 MB is a reasonable hard cap.
-DOWNLOAD_TIMEOUT_SECONDS = 120.0
+# Timeout for the JSON download itself. Agent manifests are small
+# (typically < 50 KB), so 30s is generous and still bounded.
+DOWNLOAD_TIMEOUT_SECONDS = 30.0
 MAX_DOWNLOAD_REDIRECTS = 3
-MAX_AGENT_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB hard cap
+MAX_AGENT_JSON_BYTES = 1 * 1024 * 1024  # 1 MB hard cap
 
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -525,10 +525,13 @@ class AgentCatalog:
     ) -> Dict[str, Any]:
         """
         Download, verify, and install a catalog agent.
-        Delegates the actual install to ``AgentRegistry.install_agent_zip``
-        -- the same code path as a manual ZIP upload. This guarantees
-        that catalog installs pass through the exact same validation
-        as uploads (zip safety, manifest schema, size caps).
+
+        Agent catalog packages are strictly single JSON files (unlike
+        skills/providers which use ZIP archives). The flow is:
+          1. Download the JSON file with SHA-256 verification.
+          2. Parse and validate the JSON structure.
+          3. Delegate to ``AgentRegistry.install_catalog_agent`` which
+             handles icon extraction, ID sanitization, and atomic write.
         """
         try:
             await self.ensure_fresh()
@@ -557,28 +560,38 @@ class AgentCatalog:
             item.download_url,
         )
 
-        zip_bytes = await self._download_zip(
+        json_bytes = await self._download_json(
             url=item.download_url,
             expected_sha256=item.checksum_sha256.strip().lower(),
             agent_hint=item.id,
         )
 
+        # Parse JSON
+        try:
+            agent_data = json.loads(json_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(
+                f"Agent {item.id!r} download is not valid JSON: {exc}"
+            ) from exc
+
         # Delegate to registry (synchronous -- wrap in thread).
         return await asyncio.to_thread(
-            self._registry.install_agent_zip,
-            zip_bytes,
-            source_filename=f"{item.id}-{item.version}.zip",
-            source="catalog",
+            self._registry.install_catalog_agent,
+            agent_data,
+            "catalog",
         )
 
-    async def _download_zip(
+    async def _download_json(
         self,
         *,
         url: str,
         expected_sha256: str,
         agent_hint: str,
     ) -> bytes:
-        """Download, verify, and return the ZIP content."""
+        """
+        Download a JSON agent manifest, verify SHA-256, and return
+        the raw bytes. The caller is responsible for JSON parsing.
+        """
         scheme = (url or "").strip().lower()
         if not (scheme.startswith("http://") or scheme.startswith("https://")):
             raise ValueError(
@@ -599,13 +612,13 @@ class AgentCatalog:
                             f"Agent {agent_hint!r} download failed: "
                             f"HTTP {response.status_code}."
                         )
-                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    async for chunk in response.aiter_bytes(chunk_size=16 * 1024):
                         if not chunk:
                             continue
-                        if len(content) + len(chunk) > MAX_AGENT_ZIP_BYTES:
+                        if len(content) + len(chunk) > MAX_AGENT_JSON_BYTES:
                             raise ValueError(
                                 f"Agent {agent_hint!r} download exceeds "
-                                f"{MAX_AGENT_ZIP_BYTES} bytes. Aborting."
+                                f"{MAX_AGENT_JSON_BYTES} bytes. Aborting."
                             )
                         content.extend(chunk)
                         hasher.update(chunk)
